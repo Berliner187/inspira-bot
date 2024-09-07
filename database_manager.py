@@ -11,7 +11,7 @@ import aiosqlite
 from referral import RESOURCE_DICT
 
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 DEBUG = True
 
 
@@ -33,7 +33,6 @@ FIELDS_FOR_USERS = [
     {'name': 'date_register', 'type': 'TEXT'},
     {'name': 'user_status', 'type': 'BOOL'},
     {'name': 'user_status_date_upd', 'type': 'TEXT'},
-    {'name': 'product_id', 'type': 'TEXT'}
 ]
 FIELDS_FOR_PRODUCTS = [
     {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
@@ -84,27 +83,30 @@ class DataBaseManager:
             return False
 
     def create_table(self, table_name: str, fields: list):
-        print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
-        print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
+        if self.__check_exist_table:
+            print(f"--*-- [ OK ] TABLE ({table_name}) in DATABASE ({self.db_name}) --*--")
+            sleep(.25)
+        else:
+            print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
+            print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
 
-        __conn = sqlite3.connect(self.db_name)
-        cur = __conn.cursor()
+            __conn = sqlite3.connect(self.db_name)
+            cur = __conn.cursor()
 
-        field_definitions = []
-        for field in fields:
-            field_name = field['name']
-            field_type = field['type']
-            field_definitions.append(f'{field_name} {field_type}')
+            field_definitions = []
+            for field in fields:
+                field_name = field['name']
+                field_type = field['type']
+                field_definitions.append(f'{field_name} {field_type}')
 
-        field_definitions_str = ', '.join(field_definitions)
-        sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
+            field_definitions_str = ', '.join(field_definitions)
+            sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
 
-        cur.execute(sql_query)
-        __conn.commit()
-        __conn.close()
+            cur.execute(sql_query)
+            __conn.commit()
+            __conn.close()
 
-        print("----------- SUCCESS -----------")
-        sleep(.5)
+            print("----------- SUCCESS -----------")
 
     def add_record(self, table_name: str, data: dict):
         """
@@ -213,9 +215,9 @@ class ProductManager(DataBaseManager):
 
     def update_user_product_id(self, user_id: int, product_id: int):
         """
-        Обновляет номер группы и начальный статус пользователя в базе данных.
-        :param user_id: ID пользователя, чью группу нужно обновить.
-        :param product_id: Уникальный номер изделия.
+            Обновляет номер изделия.
+            :param user_id: ID пользователя, чье изделие нужно обновить.
+            :param product_id: Уникальный номер изделия.
         """
         print(f"Connecting to database: {self.db_name}")
 
@@ -289,6 +291,63 @@ class ProductManager(DataBaseManager):
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while get user status for {user_id} -----")
+
+    def get_all_groups(self) -> list:
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT * FROM {PRODUCTS_TABLE_NAME}'
+
+            cursor.execute(query)
+            list_users_data = cursor.fetchall()
+            conn.close()
+
+            return list_users_data
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while get all groups -----")
+
+    def find_all_users_from_group(self, group_number: str) -> list:
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT user_id FROM {PRODUCTS_TABLE_NAME} WHERE group_number = ?'
+            cursor.execute(query, (group_number,))
+
+            list_users_data = cursor.fetchall()
+
+            conn.close()
+            list_users_data = [item[0] for item in list_users_data]
+
+            return list_users_data
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while find all users from group -----")
+
+    def get_user_card(self, user_id: int) -> dict:
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT * FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
+
+            list_users_data = cursor.fetchone()
+
+            card_user = {
+                'product_id': list_users_data[1],
+                'product_status': list_users_data[2],
+                'group_id': list_users_data[4],
+                'update_product_status': list_users_data[5]
+            }
+            conn.close()
+
+            return card_user
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while get user card -----")
 
 
 class UserManager(DataBaseManager):
@@ -452,6 +511,26 @@ class UserManager(DataBaseManager):
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while updating user status for {user_id} -----")
+
+    def update_contact_info(self, user_id: int, phone: str):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = '''
+                UPDATE users
+                SET phone = ?
+                WHERE user_id = ?
+                '''
+
+            cursor.execute(query, (phone, user_id))
+            conn.commit()
+            conn.close()
+
+            print(f"User {user_id} contact success updated")
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while updating phone for {user_id} -----")
 
 
 class ReferralArrival(DataBaseManager):

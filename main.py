@@ -33,7 +33,7 @@ from database_manager import INSPIRA_DB, UserManager, ProductManager, ReferralAr
 from secure import SecureDivision
 
 
-__version__ = '0.0.1.0'
+__version__ = '0.0.1.1'
 DEBUG = True
 
 
@@ -72,7 +72,14 @@ notify_banned_users = []
 
 # ===========================
 # --- ШАБЛОННЫЕ СООБЩЕНИЯ ---
-ADMIN_PREFIX_TEXT = '---> control panel <---\n'
+ADMIN_PREFIX_TEXT = '⚠ CONTROL PANEL ⚠\n'
+PRODUCT_STATUSES = {
+    "RECEIVED": "Получено ✅",
+    "DONE": "Ожидает получения 🟡",
+    "WORK": "В работе ⌛",
+    "WAIT": "Ожидается ввод"
+}
+USER_PREFIX_TEXT = '<b>Уважаемый гость!</b>\n'
 
 
 # Security
@@ -83,7 +90,6 @@ user_messages = {}
 @timing_decorator
 async def check_ban_users(user_id):
     # -------------------БАН ЮЗЕРОВ --------------
-    global notify_banned_users
 
     check = await check_temporary_block(user_id)
     if check:
@@ -153,7 +159,6 @@ async def check_user_in_db(message):
     user_id = message.from_user.id
     first_name = message.chat.first_name
     last_name = message.chat.last_name
-    user_name = message.chat.username
 
     user_manager = UserManager(INSPIRA_DB)
     result = user_manager.check_user_in_database(user_id)
@@ -183,7 +188,7 @@ async def check_user_in_db(message):
 
         await bot.send_message(
             admin_user_id,
-            f"⚠ NEW USER ⚠\n{first_name} {last_name} - {user_name} ({user_id})",
+            f"⚠ NEW USER ⚠\n{first_name} {last_name} ({user_id})",
             reply_markup=markup
         )
 
@@ -201,9 +206,9 @@ async def start_message(message: types.Message):
         write_log(f"USER {message.from_user.id} in /start", "RUN")
 
         wait_message = await message.answer(
-            "<b>➔ INSPIRA</b>\n\n"
+            "<b>➔ INSPIRA</b>\n"
             "Creative workshop\n\n"
-            "<b>↧ DESIGN by </b>KOZAK <b>2024</b>\n",
+            "<b>↧ DESIGN by </b>KOZAK\n",
             parse_mode='HTML'
         )
         await check_user_in_db(message)
@@ -217,31 +222,64 @@ async def start_message(message: types.Message):
             print("ID ARRIVAL:", check_for_ref, message.from_user.id)
 
         await asyncio.sleep(1)
-        kb = [
-            [
-                types.KeyboardButton(text="Узнать статус изделия"),
+
+        product_manager = ProductManager(INSPIRA_DB)
+        product_manager.update_product_status(user_id=message.from_user.id, new_status="WAIT")
+        product_status_by_user = product_manager.get_product_status(user_id=message.from_user.id)
+
+        if product_status_by_user is not None:
+            kb = [
+                [
+                    types.KeyboardButton(text="Узнать статус изделия"),
+                ]
             ]
-        ]
+        else:
+            kb = [
+                [
+                    types.KeyboardButton(text="Заполнить контактную информацию"),
+                ]
+            ]
+
         keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
         await bot.send_photo(
             message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
             reply_markup=keyboard, parse_mode='HTML',
-            caption=f'<b>INSPIRA – искусство живет здесь.</b>')
+            caption=f'<b>INSPIRA – искусство живет здесь.</b>\n\n'
+                    f'Привет! Это Бот Inspira - тут ты можешь записаться на мастер-класс по гончарному делу, '
+                    f'а также узнать о готовности твоего изделия')
         await wait_message.delete()
 
-        url_kb = InlineKeyboardMarkup(row_width=3)
-        url_1 = InlineKeyboardButton(text='☎️Поддержка', url='https://t.me/schneller_los')
-        url_more = InlineKeyboardButton(text='✱О проекте', callback_data='more_info_callback')
-        url_2 = InlineKeyboardButton(text='🔛Промо', url='https://dprofile.ru/case/45788/taxi-watcher-telegram-bot-iandeks-taksi')
-        url_3 = InlineKeyboardButton(text='❓Часто задаваемые вопросы', url='https://telegra.ph/FAQ-08-27-5')
-        url_instr = InlineKeyboardButton(text='📰Инструкция', callback_data='send_instruction_callback')
-        url_start = InlineKeyboardButton(text='🚀Начать', callback_data='get_start_callback')
-        url_kb.add(url_2, url_instr, url_more)
-        url_kb.add(url_3)
 
-        # await message.answer(
-        #     "",
-        #     reply_markup=url_kb, parse_mode='HTML')
+@dp.message_handler(lambda message: message.text == 'Заполнить контактную информацию')
+async def product_status(message: types.Message):
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    phone_button = types.KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)
+    keyboard.add(phone_button)
+
+    await message.answer("Пожалуйста, отправьте свой номер телефона:", reply_markup=keyboard)
+
+
+@dp.message_handler(content_types=types.ContentType.CONTACT)
+async def contact_handler(message: types.Message):
+    user_id = message.from_user.id
+    phone = message.contact.phone_number
+    first_name = message.from_user.first_name
+
+    user_manager = UserManager(INSPIRA_DB)
+    user_manager.update_contact_info(user_id=user_id, phone=phone)
+
+    kb = [
+        [
+            types.KeyboardButton(text="Узнать статус изделия")
+        ],
+        [
+            types.KeyboardButton(text="Больше"),
+            types.KeyboardButton(text="Мои данные")
+        ]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+    await message.answer(f"Спасибо, {first_name}! Ваш номер телефона успешно получен.", reply_markup=keyboard)
 
 
 @dp.message_handler(commands=['help'])
@@ -250,17 +288,12 @@ async def help_user(message: types.Message):
     # =========== ОГРАНИЧЕНИЯ на ЗАПРОСЫ ================
     if await check_ban_users(message.from_user.id) is not True:
         url_kb = InlineKeyboardMarkup(row_width=2)
-        url_error_codes = InlineKeyboardButton(text='Коды ошибок', url=ERRORS_DOCU)
-        url_help = InlineKeyboardButton(text='Поддержка', url='https://t.me/schneller_los')
-        url_faq = InlineKeyboardButton(text='Часто задаваемые вопросы', url='https://telegra.ph/FAQ-08-27-5')
-        url_kb.add(url_error_codes, url_help, url_faq)
-        await message.answer('Ссылки, которые могут помочь', reply_markup=url_kb)
-
-
-@dp.callback_query_handler(text='get_start_callback')
-async def get_start_callback(callback: types.CallbackQuery):
-    if await check_ban_users(callback.message.from_user.id) is not True:
-        write_log(f"USER {callback.message.chat.id} in /start: Начать", "TAP")
+        url_help = InlineKeyboardButton(text='Поддержка', url='https://taxi-watcher.ru')
+        url_link = InlineKeyboardButton(text='Наш сайт', url='https://taxi-watcher.ru')
+        url_kb.add(url_help, url_link)
+        await message.answer(
+            'Если возникли какие-либо трудности или вопросы, пожалуйста, ознакомьтесь со списком ниже',
+            reply_markup=url_kb)
 
 
 # =============================================================================
@@ -277,7 +310,7 @@ async def product_status(message: types.Message):
     if _status_product == 'WORK':
         await bot.send_message(
             message.from_user.id,
-            'В ПРОЦЕССЕ ⌛\n\n<i>Вам придет уведомление, как только Ваше изделие будет готово.</i>', parse_mode='HTML'
+            'В РАБОТЕ ⌛\n\n<i>Вам придет уведомление, как только Ваше изделие будет готово.</i>', parse_mode='HTML'
         )
 
     elif _status_product == 'DONE':
@@ -285,14 +318,26 @@ async def product_status(message: types.Message):
         ready_button = InlineKeyboardButton(
             "ИЗДЕЛИЕ ПОЛУЧИЛ", callback_data=f"product_has_been_received:{message.from_user.id}")
         markup.add(ready_button)
-
         await bot.send_message(
-            message.from_user.id, 'ГОТОВО ✅\n\nМожете забрать свое творение!', reply_markup=markup
+            message.from_user.id, '<b>ГОТОВО ✅</b>\n\nМожете забрать свое творение!', reply_markup=markup,
+            parse_mode='HTML'
+        )
+
+    elif _status_product == 'RECEIVED':
+        await bot.send_message(
+            message.from_user.id, '<b>ИЗДЕЛИЕ НА РУКАХ</b>\n\nПриходите к нам еще!', parse_mode='HTML'
+        )
+
+    elif _status_product == 'WAIT':
+        await bot.send_message(
+            message.from_user.id,
+            '<b>ИЗДЕЛИЕ В ОЧЕРЕДИ</b>\n\nВам придет уведомление, когда Ваше изделие пойдет в работу.',
+            parse_mode='HTML'
         )
 
     else:
         await bot.send_message(
-            message.from_user.id, 'да хз ваще', parse_mode='HTML'
+            message.from_user.id, 'Статус не определен', parse_mode='HTML'
         )
 
 
@@ -521,7 +566,7 @@ async def process_fill_guest_card(callback_query: types.CallbackQuery):
             f"Введите номер группы для {user_id}:"
         )
 
-        @dp.message_handler(lambda message: message.text.isdigit())
+        @dp.message_handler(lambda message: message.text)
         async def process_group_number(message: types.Message):
             group_number = message.text
 
@@ -533,8 +578,15 @@ async def process_fill_guest_card(callback_query: types.CallbackQuery):
                 f"{ADMIN_PREFIX_TEXT}"
                 f"<b>ПРИНЯТО</b>\n\n"
                 f"О пользователе {user_id}:\n"
-                f"<i>-> Статус изделия: </i><b>В ПРОЦЕССЕ 🟡</b>\n"
+                f"<i>-> Статус изделия: </i><b>В РАБОТЕ 🟡</b>\n"
                 f"<i>-> Номер группы: </i><b>{group_number}</b>",
+                parse_mode='HTML'
+            )
+
+            await bot.send_message(
+                user_id,
+                f"{USER_PREFIX_TEXT}\n"
+                f"Ваше изделие принято в работу!",
                 parse_mode='HTML'
             )
 
@@ -548,6 +600,34 @@ async def process_fill_guest_card(callback_query: types.CallbackQuery):
                 f"Изменить статус изделия пользователя {user_id}",
                 reply_markup=markup
             )
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('bring_the_product_to_work:'))
+async def bring_the_product_to_work(callback_query: types.CallbackQuery):
+    # TODO: Связать с process_fill_guest_card
+    if callback_query.from_user.id == admin_user_id:
+        user_id = int(callback_query.data.split(':')[1])
+
+        db_manager = ProductManager(INSPIRA_DB)
+        db_manager.update_product_status(user_id, "WORK")
+        _user_card = db_manager.get_user_card(user_id)
+
+        await bot.send_message(
+            admin_user_id,
+            f"{ADMIN_PREFIX_TEXT}"
+            f"<b>ПРИНЯТО В РАБОТУ</b>\n\n"
+            f"• Статус изделия гостя: </i><b>{PRODUCT_STATUSES[_user_card['product_status']]}</b>\n"
+            f"• Номер группы: </i><b>{_user_card['group_id']}</b>\n\n"
+            f"<i>Обновлено {_user_card['update_product_status']}</i>",
+            parse_mode='HTML'
+        )
+
+        await bot.send_message(
+            user_id,
+            f"<b>ПРИНЯТО</b>\n\n"
+            f"Ваше изделие принято в работу!",
+            parse_mode='HTML'
+        )
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('fill_guest_product_id:'))
@@ -567,13 +647,6 @@ async def process_fill_guest_product_id(callback_query: types.CallbackQuery):
             db_manager = ProductManager(INSPIRA_DB)
             db_manager.update_user_group(user_id, group_number, "WORK")
 
-            await bot.send_message(
-                admin_user_id,
-                f"-> В ПРОЦЕССЕ 🟡\n"
-                f"<i>Статус изделия для {user_id}</i>\n\n"
-                f"-> Номер группы: {group_number}"
-            )
-
             markup = InlineKeyboardMarkup()
             ready_button = InlineKeyboardButton(
                 "Изменить статус на 'готово'", callback_data=f"set_status_ready:{user_id}")
@@ -581,7 +654,9 @@ async def process_fill_guest_product_id(callback_query: types.CallbackQuery):
 
             await bot.send_message(
                 admin_user_id,
-                f"Изменить статус пользователя {user_id} на 'В ПРОЦЕССЕ'",
+                f"-> В РАБОТЕ 🟡\n"
+                f"<i>Статус изделия для {user_id}</i>\n\n"
+                f"-> Номер группы: {group_number}",
                 reply_markup=markup
             )
 
@@ -595,7 +670,7 @@ async def process_set_status_ready(callback_query: types.CallbackQuery):
     status_update_product_status = product_manager.update_product_status(user_id, "DONE")
 
     if status_update_product_status:
-        message_for_admin = f'<b>ГОТОВО</b>\n<i>Статус изделия для {user_id} задан</i>'
+        message_for_admin = f'{ADMIN_PREFIX_TEXT}<b>ГОТОВО</b>\n<i>Статус изделия для {user_id} задан</i>'
         await bot.send_message(
             user_id,
             f"<b>Уважаемый гость!</b>\n"
@@ -620,16 +695,100 @@ async def process_set_status_ready(callback_query: types.CallbackQuery):
     product_manager = ProductManager(INSPIRA_DB)
     status_update_product_status = product_manager.update_product_status(user_id, "RECEIVED")
 
+    await bot.send_message(
+        admin_user_id,
+        f"{ADMIN_PREFIX_TEXT}Пользователь {user_id} подтвердил получение", parse_mode='HTML'
+    )
+
     if status_update_product_status:
         message_for_user = (f'<b>Расскажите о своих впечатлениях!</b>\n\n'
                             f'Уделите совсем немного времени, чтобы рассказать о них в этом опросе:\n'
-                            f'<a href="https://t.me/BotFather">тут крч ссылка</a>')
+                            f'<a href="https://google.com">тут крч ссылка будет</a>')
     else:
         message_for_user = f'<b>Изделие еще не готово :(</b>\n\nБот уведомит как только оно будет готово!'
 
     await bot.send_message(
         callback_query.from_user.id, message_for_user, parse_mode='HTML'
     )
+
+
+@dp.message_handler(lambda message: message.text == '/GROUPS/')
+async def show_all_groups(message: types.Message):
+    if message.from_user.id == admin_user_id:
+        await construction_to_delete_messages(message)
+
+        product_manager = ProductManager(INSPIRA_DB)
+        list_users_data = product_manager.get_all_groups()
+
+        unique_groups = set(item[4] for item in list_users_data)
+        unique_groups_list = list(unique_groups)
+
+        markup = InlineKeyboardMarkup()
+        for group in unique_groups_list:
+            button = InlineKeyboardButton(f"ГРУППА {group}", callback_data=f"list_all_users_by_group:{group}")
+            markup.add(button)
+
+        _sent_message = await bot.send_message(
+            admin_user_id,
+            f"{ADMIN_PREFIX_TEXT}"
+            f"СПИСОК ВСЕХ ДОСТУПНЫХ ГРУПП",
+            reply_markup=markup
+        )
+        await drop_admin_message(message, _sent_message)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('list_all_users_by_group:'))
+async def list_all_users_by_group(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id == admin_user_id:
+        group_number = callback_query.data.split(':')[1]
+
+        product_manager = ProductManager(INSPIRA_DB)
+        list_users_from_group = product_manager.find_all_users_from_group(group_number)
+
+        markup = InlineKeyboardMarkup()
+        for user_id in list_users_from_group:
+            button = InlineKeyboardButton(f"Гость {user_id}", callback_data=f"user_card:{user_id}")
+            markup.add(button)
+
+        _sent_message = await bot.send_message(
+            admin_user_id,
+            f"{ADMIN_PREFIX_TEXT}"
+            f"ГОСТИ ИЗ ГРУППЫ <b>{group_number}</b>",
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('user_card:'))
+async def user_card(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id == admin_user_id:
+        user_id = int(callback_query.data.split(':')[1])
+
+        product_manager = ProductManager(INSPIRA_DB)
+        card_user = product_manager.get_user_card(user_id)
+
+        markup = InlineKeyboardMarkup()
+
+        if card_user['product_status'] == 'WAIT':
+            ready_button = InlineKeyboardButton(
+                f"ПРИВЕСТИ ИЗДЕЛИЕ К РАБОТЕ", callback_data=f"bring_the_product_to_work:{user_id}")
+            markup.add(ready_button)
+
+        elif card_user['product_status'] == 'WORK':
+            ready_button = InlineKeyboardButton(
+                f"ПРИВЕСТИ ИЗДЕЛИЕ К ПОЛУЧЕНИЮ", callback_data=f"set_status_ready:{user_id}")
+            markup.add(ready_button)
+
+        _sent_message = await bot.send_message(
+            admin_user_id,
+            f"Карточка пользователя <b>{user_id}</b>\n\n"
+            f"Номер изделия: <b>{card_user['product_id']}</b>\n"
+            f"Статус изделия: <b>{PRODUCT_STATUSES[card_user['product_status']]}</b>\n"
+            f"Группа: <b>{card_user['group_id']}</b>\n\n"
+            f"<i>Статус обновлен <b>{card_user['update_product_status']}</b></i>",
+            parse_mode='HTML',
+            reply_markup=markup
+        )
 
 
 @dp.message_handler(lambda message: message.text == '/LOGS/')
@@ -673,7 +832,7 @@ async def show_logs(message: types.Message):
 
 
 @dp.message_handler(lambda message: message.text == '/USERS/')
-async def view_parsing(message: types.Message):
+async def show_all_users(message: types.Message):
     if message.from_user.id == admin_user_id:
         wait_message = await message.answer("➜ LOADING DB... ///")
         await construction_to_delete_messages(message)
@@ -686,7 +845,7 @@ async def view_parsing(message: types.Message):
 
         cnt_users = len(all_users)
 
-        date_format = "%d-%m-%Y %H:%M:%S"
+        date_format = "%H:%M %d-%m-%Y"
         sorted_users = reversed(sorted(all_users, key=lambda x: datetime.datetime.strptime(x[5], date_format)))
 
         for user in sorted_users:
@@ -739,14 +898,12 @@ async def other_commands(message: types.Message):
                     '/sms_video - (c, video, i)' \
                     '/stop_all - (c)\n\n' \
                     '/referral - (c)\n' \
-                    '/responses - (c)\n\n' \
                     '/c - (c)\n' \
                     '/i - (c, i)\n' \
                     '/l - (c, i)\n\n' \
                     '/price_p - (c, i, p)\n' \
                     '/address_p - (c, i, a)\n\n' \
                     '/all - (c, m)\n' \
-                    '/adv - (c filename count_users)\n\n' \
                     '/rates - (c)\n\n' \
                     '/rate_user - (c, id) ' \
                     '/rate_all - (c)\n\n'
@@ -1097,7 +1254,7 @@ async def on_startup(dp):
     """
     )
     print(f'===== DEBUG: {DEBUG} =============================================')
-    print(f'===== INSPIRA : {__version__}  =======================================')
+    print(f'===== INSPIRA: {__version__}  =======================================')
 
 
 if __name__ == '__main__':
