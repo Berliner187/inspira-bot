@@ -11,7 +11,7 @@ import aiosqlite
 from referral import RESOURCE_DICT
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 DEBUG = True
 
 
@@ -213,7 +213,7 @@ class ProductManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while updating user group for {user_id} -----")
 
-    def update_user_product_id(self, user_id: int, product_id: int):
+    def update_product_id(self, user_id: int, product_id: int):
         """
             Обновляет номер изделия.
             :param user_id: ID пользователя, чье изделие нужно обновить.
@@ -345,6 +345,22 @@ class ProductManager(DataBaseManager):
             conn.close()
 
             return card_user
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while get user card -----")
+
+    def get_product_id(self, user_id: int):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT product_id FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
+
+            user_product_id = cursor.fetchone()
+            conn.close()
+
+            return user_product_id[0]
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while get user card -----")
@@ -531,6 +547,47 @@ class UserManager(DataBaseManager):
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while updating phone for {user_id} -----")
+
+    @staticmethod
+    def __format_number(phone_number) -> str:
+        str_phone_number = str(phone_number)
+        str_number = (f"+{str_phone_number[0]} {str_phone_number[1:4]} {str_phone_number[4:7]} {str_phone_number[8:10]} "
+                      f"{str_phone_number[11:12]} {str_phone_number[13:14]}")
+        return str_number
+
+    def get_phone(self, user_id: int) -> str:
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
+
+            phone_from_user = cursor.fetchone()[0]
+            conn.close()
+
+            return self.__format_number(phone_from_user)
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while get phone from user -----")
+
+    def get_user_contact_info(self, user_id: int):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
+
+            user_contact_info = cursor.fetchone()
+            conn.close()
+
+            user_contact_info_str = f"{user_contact_info[2]} – {user_contact_info[3]}"
+
+            return user_contact_info_str
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while get contact info from user -----")
 
 
 class ReferralArrival(DataBaseManager):
