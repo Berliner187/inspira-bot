@@ -11,7 +11,7 @@ import aiosqlite
 from referral import RESOURCE_DICT
 
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 DEBUG = True
 
 
@@ -20,8 +20,9 @@ FILE_LIMITED_USERS = 'limited_users.db'
 
 USERS_TABLE_NAME = 'users'
 PRODUCTS_TABLE_NAME = 'products'
-REFERRALS_TABLE_NAME = 'products'
+REFERRALS_TABLE_NAME = 'referrals'
 LIMITED_USERS_TABLE_NAME = 'limited_users'
+ADMINS_TABLE_NAME = 'admins'
 
 
 FIELDS_FOR_USERS = [
@@ -188,7 +189,8 @@ class ProductManager(DataBaseManager):
         :param group_number: Новый номер группы, который нужно установить.
         :param initial_status: Начальный статус пользователя, по умолчанию "в процессе".
         """
-        print(f"Connecting to database: {self.db_name}")
+        if DEBUG:
+            print(f"Connecting to database: {self.db_name}")
 
         try:
             conn = sqlite3.connect(self.db_name)
@@ -206,8 +208,9 @@ class ProductManager(DataBaseManager):
             conn.commit()
             conn.close()
 
-            print(
-                f"User {user_id} group updated to '{group_number}' and status set to '{initial_status}' at {status_update_date}")
+            if DEBUG:
+                print(f"User {user_id} group updated to '{group_number}' and status set to '{initial_status}' "
+                      f"at {status_update_date}")
 
         except Exception as e:
             print("---------- ERROR ----------")
@@ -275,6 +278,11 @@ class ProductManager(DataBaseManager):
             return False
 
     def get_product_status(self, user_id: int) -> str:
+        """
+            Получение статуса изделия.
+            :param user_id: уникальный идентификатор пользователя
+            :return: статус изделия – НЕ НАЧАТ, В ПРОЦЕССЕ, ГОТОВО, ПОЛУЧЕНО
+        """
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -283,16 +291,20 @@ class ProductManager(DataBaseManager):
             query += f' WHERE user_id = {user_id}'
 
             cursor.execute(query)
-            results = cursor.fetchone()[0]
+            status = cursor.fetchone()[0]
             conn.close()
 
-            return results
+            return status
 
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while get user status for {user_id} -----")
 
     def get_all_groups(self) -> list:
+        """
+            Получение списка всех групп из БД.
+            :return: список всех сохраненных групп.
+        """
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -308,7 +320,33 @@ class ProductManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while get all groups -----")
 
+    def get_group(self, user_id: int):
+        """
+            Получение номера группы по идентификатору пользователя.
+            :param user_id: уникальный идентификатор пользователя
+            :return: номер группы
+        """
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            query = f'SELECT group_number FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
+
+            group_number = cursor.fetchone()[0]
+            conn.close()
+
+            return group_number
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while find group by user -----")
+
     def find_all_users_from_group(self, group_number: str) -> list:
+        """ TODO: Отрефакторить название
+            Выгрузка и получение всех пользователей из БД.
+            :param group_number: номер группы
+            :return: список всех пользователей одной группы
+        """
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -327,6 +365,15 @@ class ProductManager(DataBaseManager):
             print(f"----- {e} while find all users from group -----")
 
     def get_user_card(self, user_id: int) -> dict:
+        """
+            Выгрузка и получение карточки пользователя:
+            • номер изделия
+            • статус изделия
+            • номер группы
+            • дата обновления записей
+            :param user_id: уникальный идентификатор пользователя
+            :return: словарь вышеперечисленных данных
+        """
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -349,7 +396,12 @@ class ProductManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while get user card -----")
 
-    def get_product_id(self, user_id: int):
+    def get_product_id(self, user_id: int) -> str:
+        """
+            Получение номера изделия конкретного пользователя.
+            :param user_id: уникальный идентификатор пользователя
+            :return: номер изделия
+        """
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -357,7 +409,7 @@ class ProductManager(DataBaseManager):
             query = f'SELECT product_id FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
             cursor.execute(query, (user_id,))
 
-            user_product_id = cursor.fetchone()
+            user_product_id = str(cursor.fetchone())
             conn.close()
 
             return user_product_id[0]
@@ -370,7 +422,7 @@ class UserManager(DataBaseManager):
 
     def check_user_in_database(self, user_id: int):
         """
-            Проверка пользователя на существование
+            Проверка пользователя на существование.
         :param user_id: идентификатор пользователя
         :return:
         """
