@@ -33,7 +33,7 @@ FIELDS_FOR_USERS = [
     {'name': 'username', 'type': 'TEXT'},
     {'name': 'date_register', 'type': 'TEXT'},
     {'name': 'user_status', 'type': 'BOOL'},
-    {'name': 'user_status_date_upd', 'type': 'TEXT'},
+    {'name': 'user_status_date_upd', 'type': 'TEXT'}
 ]
 FIELDS_FOR_PRODUCTS = [
     {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
@@ -47,12 +47,18 @@ FIELDS_FOR_REFERRALS = [
     {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
     {'name': 'user_id', 'type': 'TEXT'},
     {'name': 'arrival_id', 'type': 'TEXT'},
-    {'name': 'date_arrival', 'type': 'TEXT'},
+    {'name': 'date_arrival', 'type': 'TEXT'}
 ]
 FIELDS_FOR_LIMITED_USERS = [
     {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
     {'name': 'user_id', 'type': 'INTEGER'},
-    {'name': 'date', 'type': 'TEXT'},
+    {'name': 'date', 'type': 'TEXT'}
+]
+FIELDS_FOR_ADMINS = [
+    {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
+    {'name': 'user_id', 'type': 'INTEGER'},
+    {'name': 'security_clearance', 'type': 'TEXT'},
+    {'name': 'admin_status', 'type': 'TEXT'}
 ]
 
 
@@ -179,6 +185,7 @@ db_manager.create_table(USERS_TABLE_NAME, FIELDS_FOR_USERS)
 db_manager.create_table(PRODUCTS_TABLE_NAME, FIELDS_FOR_PRODUCTS)
 db_manager.create_table(REFERRALS_TABLE_NAME, FIELDS_FOR_REFERRALS)
 db_manager.create_table(LIMITED_USERS_TABLE_NAME, FIELDS_FOR_LIMITED_USERS)
+db_manager.create_table(ADMINS_TABLE_NAME, FIELDS_FOR_ADMINS)
 
 
 class ProductManager(DataBaseManager):
@@ -609,14 +616,15 @@ class UserManager(DataBaseManager):
 
     def get_phone(self, user_id: int) -> str:
         try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+            _connect = sqlite3.connect(self.db_name)
+            _cursor = _connect.cursor()
 
             query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
-            cursor.execute(query, (user_id,))
+            _cursor.execute(query, (user_id,))
 
-            phone_from_user = cursor.fetchone()[0]
-            conn.close()
+            phone_from_user = _cursor.fetchone()[0]
+            _cursor.close()
+            _connect.close()
 
             return self.__format_number(phone_from_user)
         except Exception as e:
@@ -692,14 +700,14 @@ class ReferralArrival(DataBaseManager):
         referrals = self.get_latest_referrals_records().__reversed__()
 
         cnt = 0
-        out = ''
+        refs = ''
         for ref in referrals:
             cnt += 1
-            out += f'{ref[1]} --- {RESOURCE_DICT[ref[2]]} --- {ref[3]}\n'
+            refs += f'{ref[1]} --- {RESOURCE_DICT[ref[2]]} --- {ref[3]}\n'
             if cnt >= count_refs:
                 break
 
-        return out
+        return refs
 
 
 class LimitedUsersManager(DataBaseManager):
@@ -741,13 +749,13 @@ class LimitedUsersManager(DataBaseManager):
             cursor = await _conn.execute(f"SELECT * FROM {LIMITED_USERS_TABLE_NAME}")
             records = await cursor.fetchall()
 
-            response = '// BLACKLIST //\n\n'
+            response = '/// BLACKLIST ///\n\n'
             if records:
                 for record in records:
                     response += f'{record[0]} от {record[2]}\n'
                 return response
             else:
-                response += "// EMPTY //"
+                response += "/// EMPTY ///"
                 return response
 
     @timing_decorator
@@ -761,3 +769,8 @@ class LimitedUsersManager(DataBaseManager):
                     return True
                 else:
                     return False
+
+
+class AdminsManager(DataBaseManager):
+    def grant_rights_to_admin(self, superuser_id: int):
+        pass
