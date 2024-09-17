@@ -57,8 +57,8 @@ FIELDS_FOR_LIMITED_USERS = [
 FIELDS_FOR_ADMINS = [
     {'name': 'id', 'type': 'INTEGER PRIMARY KEY'},
     {'name': 'user_id', 'type': 'INTEGER'},
-    {'name': 'security_clearance', 'type': 'TEXT'},
-    {'name': 'admin_status', 'type': 'TEXT'}
+    {'name': 'security_clearance', 'type': 'INTEGER'},
+    {'name': 'admin_status', 'type': 'BOOL'}
 ]
 
 
@@ -70,50 +70,28 @@ class DataBaseManager:
     def __init__(self, db_name):
         self.db_name = db_name
 
-    def __check_exist_table(self, table_name: str):
-        """
-            Проверка на существование таблицы
-        :param table_name:
-        :return:
-        """
+    def create_table(self, table_name: str, fields: list):
+        print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
+        print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
+
         __conn = sqlite3.connect(self.db_name)
         cur = __conn.cursor()
 
-        exist_table = cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+        field_definitions = []
+        for field in fields:
+            field_name = field['name']
+            field_type = field['type']
+            field_definitions.append(f'{field_name} {field_type}')
 
+        field_definitions_str = ', '.join(field_definitions)
+        sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
+
+        cur.execute(sql_query)
         __conn.commit()
         __conn.close()
 
-        if exist_table:
-            return True
-        else:
-            return False
-
-    def create_table(self, table_name: str, fields: list):
-        if self.__check_exist_table:
-            print(f"--*-- [ OK ] TABLE ({table_name}) in DATABASE ({self.db_name}) --*--")
-            sleep(.25)
-        else:
-            print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
-            print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
-
-            __conn = sqlite3.connect(self.db_name)
-            cur = __conn.cursor()
-
-            field_definitions = []
-            for field in fields:
-                field_name = field['name']
-                field_type = field['type']
-                field_definitions.append(f'{field_name} {field_type}')
-
-            field_definitions_str = ', '.join(field_definitions)
-            sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
-
-            cur.execute(sql_query)
-            __conn.commit()
-            __conn.close()
-
-            print("----------- SUCCESS -----------")
+        print("----------- SUCCESS -----------")
+        sleep(.25)
 
     def add_record(self, table_name: str, data: dict):
         """
@@ -126,9 +104,11 @@ class DataBaseManager:
             placeholders = ', '.join('?' * len(data))
             values = tuple(data.values())
 
-            if 'date_register' in data and data['date_register'] is None:
+            if 'date_register' in data and data['date_register'] is None and data['user_status_date_upd'] is None:
                 now = datetime.datetime.now()
-                data['date_register'] = now.strftime("%d-%m-%Y %H:%M:%S")
+                date_format = "%d-%m-%Y %H:%M:%S"
+                data['date_register'] = now.strftime(date_format)
+                data['user_status_date_upd'] = now.strftime(date_format)
 
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -141,18 +121,17 @@ class DataBaseManager:
             if DEBUG:
                 print(f"\nDataBaseManager -> add_record to table '{table_name}'")
                 print(f"data: {data}")
-                print(f"query: {query}")
                 print(f"values: {values}")
 
         except Exception as e:
             print("---------- ERROR ----------")
-            print(f"----- {e} while adding record to {table_name} -----")
+            print(f"----- add_record: {e} {table_name} -----")
 
     def find_by_condition(self, table_name: str, condition: str = None):
         """
         Метод поиска записей по условию в указанной таблице.
         :param table_name: Название таблицы, в которой будет происходить поиск.
-        :param condition: Условие поиска (строка SQL). Например, "user_id = 123" или "username LIKE 'ivanov'".
+        :param condition: Условие поиска (строка SQL). Например, "user_id = 123"
         :return: Список найденных записей (список кортежей).
         """
         try:
@@ -178,14 +157,6 @@ class DataBaseManager:
             print("---------- ERROR ----------")
             print(f"----- {e} while finding records in {table_name} -----")
             return []
-
-
-db_manager = DataBaseManager(INSPIRA_DB)
-db_manager.create_table(USERS_TABLE_NAME, FIELDS_FOR_USERS)
-db_manager.create_table(PRODUCTS_TABLE_NAME, FIELDS_FOR_PRODUCTS)
-db_manager.create_table(REFERRALS_TABLE_NAME, FIELDS_FOR_REFERRALS)
-db_manager.create_table(LIMITED_USERS_TABLE_NAME, FIELDS_FOR_LIMITED_USERS)
-db_manager.create_table(ADMINS_TABLE_NAME, FIELDS_FOR_ADMINS)
 
 
 class ProductManager(DataBaseManager):
@@ -436,7 +407,7 @@ class UserManager(DataBaseManager):
         __connect = sqlite3.connect(self.db_name)
         __cursor = __connect.cursor()
 
-        __cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        __cursor.execute(f"SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?", (user_id,))
         result = __cursor.fetchone()
 
         __cursor.close()
@@ -626,7 +597,7 @@ class UserManager(DataBaseManager):
             _cursor.close()
             _connect.close()
 
-            return self.__format_number(phone_from_user)
+            return phone_from_user
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while get phone from user -----")
@@ -772,5 +743,30 @@ class LimitedUsersManager(DataBaseManager):
 
 
 class AdminsManager(DataBaseManager):
-    def grant_rights_to_admin(self, superuser_id: int):
-        pass
+    def grant_rights_to_admin(self, superuser_id: int, new_admin_id: int, security_clearance: str):
+
+        admin_data_to_db = {
+            "user_id": new_admin_id,
+            "security_clearance": security_clearance,
+            "admin_status": "active"
+        }
+
+        try:
+            self.add_record(ADMINS_TABLE_NAME, admin_data_to_db)
+
+        except Exception as e:
+            print("---------- ERROR ----------")
+            print(f"----- {e} while grant_rights_to_admin for {new_admin_id} -----")
+
+    def _get_security_clearance(self, user_id: int):
+        print(self.find_by_condition(ADMINS_TABLE_NAME, f"user_id = {user_id}"))
+        return 0
+
+    def check_security_clearance(self, user_id: int):
+        security_clearances = {
+            1: "Полный контроль и управление",
+            2: "Только управление"
+        }
+        sc = self._get_security_clearance(user_id)
+
+        return security_clearances[sc]
