@@ -31,7 +31,7 @@ from database_manager import *
 from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = '0.0.2.0'
+__version__ = '0.2.1'
 DEBUG = True
 
 
@@ -458,9 +458,9 @@ ADMIN_PANEL_BUTTONS = [
     ]
 
 
-@dp.message_handler(lambda message: message.text == 'ins2133')
+@dp.message_handler(lambda message: message.text == 'inspira')
 @dp.message_handler(lambda message: message.text == '/ADMIN/')
-@dp.message_handler(commands=['ins2133'])
+@dp.message_handler(commands=['inspira'])
 async def admin_panel(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         keyboard = types.ReplyKeyboardMarkup(keyboard=ADMIN_PANEL_BUTTONS, resize_keyboard=True)
@@ -895,6 +895,9 @@ async def process_add_new_admin(message: types.Message, state: FSMContext):
                 "ADMIN", message.from_user.id, process_add_new_admin.__name__,
                 f"add new admin is success: {admin_user_id}")
 
+            await bot.send_message(admin_user_id, f"{ADMIN_PREFIX_TEXT}Вы добавлены как в группу администраторов\n\n"
+                                                  f"Чтобы открыть панель управления, нажмите /inspira")
+
         except Exception as error:
             tracer_l.tracer_charge(
                 "ERROR", message.from_user.id, process_add_new_admin.__name__,
@@ -1176,7 +1179,7 @@ async def on_startup(dp):
 
 if __name__ == '__main__':
     try:
-        dp.register_message_handler(admin_panel, commands=["ins2133"])
+        dp.register_message_handler(admin_panel, commands=["inspira"])
         executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
 
     except aiogram.utils.exceptions.TelegramAPIError as aiogram_critical_error:
