@@ -105,7 +105,7 @@ class Administrators:
 
 
 # Инициализация администраторов
-administrators = Administrators(admin_list=[456666281]) # 1243722606, 506667650
+administrators = Administrators(admin_list=[])
 
 
 @timing_decorator
@@ -694,7 +694,7 @@ async def list_all_users_by_group(callback_query: types.CallbackQuery):
 
         _sent_message = await bot.send_message(
             callback_query.from_user.id,
-            f"{ADMIN_PREFIX_TEXT}СПИСОК ВСЕХ ДОСТУПНЫХ ГРУПП", reply_markup=markup, parse_mode='HTML')
+            f"{ADMIN_PREFIX_TEXT}ГРУППА {group_number}", reply_markup=markup, parse_mode='HTML')
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('user_card:'))
@@ -720,14 +720,18 @@ async def user_card(callback_query: types.CallbackQuery):
         try:
             _sent_message = await bot.send_message(
                 callback_query.from_user.id,
-                f"Карточка пользователя <b>{user_id}</b>\n\n"
+                f"Карточка гостя <b>{user_id}</b>\n\n"
                 f"Номер изделия: <b>{card_user['product_id']}</b>\n"
                 f"Статус изделия: <b>{PRODUCT_STATUSES[card_user['product_status']]}</b>\n"
                 f"Группа: <b>{card_user['group_id']}</b>\n\n"
                 f"<i>Статус обновлен <b>{card_user['update_product_status']}</b></i>",
                 reply_markup=markup, parse_mode='HTML')
 
-        except Exception as e:
+            tracer_l.tracer_charge(
+                "ADMIN", callback_query.from_user.id, user_card.__name__,
+                f"success load the guest card: {user_id}")
+
+        except Exception as error:
             ready_button = InlineKeyboardButton(
                 f"ЗАПОЛНИТЬ ЗАНОВО", callback_data=f"fill_guest_card:{user_id}")
             markup.add(ready_button)
@@ -738,7 +742,9 @@ async def user_card(callback_query: types.CallbackQuery):
                 f"Попробуйте заполнить карточку гостя заново",
                 reply_markup=markup, parse_mode='HTML')
 
-            write_log(e, "ERROR")
+            tracer_l.tracer_charge(
+                "ERROR", callback_query.from_user.id, user_card.__name__,
+                f"error load the guest card: {user_id}", f"{error}")
 
 
 @dp.message_handler(lambda message: message.text == '/LOGS/')
@@ -777,7 +783,9 @@ async def show_logs(message: types.Message):
         await wait_message.delete()
         await drop_admin_message(message, sent_message)
     else:
-        write_log('TRY CHECK LOGS', 'WARNING')
+        tracer_l.tracer_charge(
+            "WARNING", message.from_user.id, show_logs.__name__,
+            f"somebody try to check logs")
         await message.answer("$^@!($@&() DB_ERR")
 
 
@@ -861,15 +869,36 @@ async def other_commands(message: types.Message):
         await drop_admin_message(message, sent_message)
 
 
-@dp.message_handler(commands=['over_right_to_admin'])
-async def blacklist_cat_users(message: types.Message):
-    if message.from_user.id in administrators.get_list_of_admins():
-        await construction_to_delete_messages(message)
+class FormAddAdmin(StatesGroup):
+    admin_user_id = State()
 
-        blocked_users = await limited_users_manager.fetch_all_users()
-        sent_message = await message.answer(blocked_users)
 
-        await drop_admin_message(message, sent_message)
+@dp.message_handler(commands=['add_admin'])
+async def cmd_add_admin(message: types.Message):
+    if message.from_user.id == superuser_id:
+        await FormAddAdmin.admin_user_id.set()
+        await message.reply("Введите user_id администратора, которого вы хотите добавить:")
+
+
+@dp.message_handler(state=FormAddAdmin.admin_user_id)
+async def process_add_new_admin(message: types.Message, state: FSMContext):
+    if message.from_user.id == superuser_id:
+        admin_user_id = int(message.text)
+
+        try:
+            admins_manager = AdminsManager(INSPIRA_DB)
+            admins_manager.add_new_admin(admin_user_id, "2")
+
+            await message.reply(f"Администратор с user_id {admin_user_id} добавлен.")
+            await state.finish()
+            tracer_l.tracer_charge(
+                "ADMIN", message.from_user.id, process_add_new_admin.__name__,
+                f"add new admin is success: {admin_user_id}")
+
+        except Exception as error:
+            tracer_l.tracer_charge(
+                "ERROR", message.from_user.id, process_add_new_admin.__name__,
+                f"somebody try to check logs", f"{error}")
 
 
 limited_users_manager = LimitedUsersManager(INSPIRA_DB)
@@ -890,13 +919,24 @@ async def blacklist_cat_users(message: types.Message):
 async def block_user(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         await construction_to_delete_messages(message)
+
         try:
             answer = await limited_users_manager.block_user(message.text)
             sent_message = await message.reply(f"<b>{answer}</b>", parse_mode='HTML')
+            tracer_l.tracer_charge(
+                "ADMIN", message.from_user.id, block_user.__name__, f"user success blocked")
+
         except sqlite3.IntegrityError:
             sent_message = await message.reply(f"<b>ALREADY BLOCKED 🟧</b>", parse_mode='HTML')
-        except Exception as e:
-            sent_message = await message.reply("/// ERROR:", e)
+            tracer_l.tracer_charge(
+                "ADMIN", message.from_user.id, block_user.__name__, f"user already blocked")
+
+        except Exception as error:
+            sent_message = await message.reply("/// ERROR:", error)
+            tracer_l.tracer_charge(
+                "ADMIN", message.from_user.id, block_user.__name__,
+                f"error while trying blocked user", f"{error}")
+
         await drop_admin_message(message, sent_message)
 
 
@@ -932,12 +972,14 @@ async def req_in_db(message: types.Message):
             return
 
         if status_user_in_bot:
-            text_status_user_in_bot = '➜ (DIRTY ❌)'
+            text_status_user_in_bot = '➜ (ЛИКВИДИРОВАН ❌)'
         else:
-            text_status_user_in_bot = '➜ (CLEAR ✅)'
+            text_status_user_in_bot = ''
 
         if find_users:
-            sent_message = await message.answer(f"➜ USER exist ➜\n\n{find_users}\n\n{text_status_user_in_bot}")
+            sent_message = await message.answer(
+                f"➜ Карточка пользователя ➜\n\n"
+                f"{find_users}\n\n{text_status_user_in_bot}", parse_mode='HTML')
         else:
             sent_message = await message.answer(f"➜ USER not exist ❌")
 
@@ -979,7 +1021,7 @@ async def req_in_db(message: types.Message):
         await drop_admin_message(message, sent_message)
 
 
-@dp.message_handler(commands=['del'])
+@dp.message_handler(commands=['drop'])
 async def req_in_db(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         try:
@@ -1014,27 +1056,6 @@ async def send_html_message(message: types.Message):
 
             try:
                 await bot.send_message(chat_id=message.text.split()[1], text=_message, parse_mode="HTML")
-                await message.answer("<b>ДОСТАВЛЕНО ✅</b>", parse_mode='HTML')
-            except Exception as e:
-                print(e)
-                await message.answer("<b>НЕ УДАЛОСЬ ❌</b>", parse_mode='HTML')
-        except Exception:
-            await message.reply("Неверно переданы аргументы.")
-
-
-@dp.message_handler(commands=['sms_video'])
-async def send_html_message(message: types.Message):
-    """
-        Отправка сообщения пользователю по user_id, с HTML-форматированием
-    """
-    if message.from_user.id in administrators.get_list_of_admins():
-        try:
-            vid_path = message.text.split(' ')[1]
-            chat_id = message.text.split(' ')[2]
-
-            try:
-                with open(vid_path, 'rb') as gif:
-                    await bot.send_animation(chat_id=chat_id, animation=gif)
                 await message.answer("<b>ДОСТАВЛЕНО ✅</b>", parse_mode='HTML')
             except Exception as e:
                 print(e)
@@ -1108,76 +1129,32 @@ async def sent_message_to_user(message: types.Message):
 
 @dp.message_handler(commands=['reboot'])
 async def reboot_server(message: types.Message):
-    if message.from_user.id in administrators.get_list_of_admins():
+    if message.from_user.id == superuser_id:
         await message.reply("➜ REBOOT in 5 sec... ➜")
+        tracer_l.tracer_charge(
+            "WARNING", message.from_user.id, reboot_server.__name__,
+            f"{message.from_user.id} reboot the server")
         await asyncio.sleep(5)
         await ServerManager().emergency_reboot()
     else:
-        write_log(f"USER {message.from_user.id} in reboot_server", "WARNING")
-        await message.reply("& Ты шо гад, попутал?")
+        tracer_l.tracer_charge(
+            "WARNING", message.from_user.id, reboot_server.__name__,
+            f"{message.from_user.id} try to reboot the server")
 
 
 class ServerManager:
     @staticmethod
     def __reboot_server():
-        write_log("reboot_server", "OK")
         os.execl(sys.executable, sys.executable, *sys.argv)
 
     async def emergency_reboot(self):
         print("emergency_reboot: start")
-        write_log("emergency_reboot", "START")
-        try:
-            write_log(f"emergency_reboot", "OK")
-        except Exception as e:
-            write_log(f"emergency_reboot: {e}", "ERROR")
-
         self.__reboot_server()
-
-
-# prices
-PRICE = types.LabeledPrice(label="Подписка на 1 месяц", amount=100*100)
-
-
-@dp.message_handler(commands=['buy'])
-async def buy(message: types.Message):
-    if "TEST" in PAYMENTS_TOKEN:
-        await bot.send_message(message.chat.id, "!Тестовый платеж!")
-    await bot.send_invoice(
-        message.chat.id,
-        title="Расширенная подписка",
-        description="Увеличенный лимит, приоритетная поддержка, кастомизация",
-        provider_token=PAYMENTS_TOKEN,
-        currency="rub",
-        photo_url="https://i.pinimg.com/736x/d3/07/2b/d3072b58b5aeb0e852ff1d12c2ec2b5a.jpg",
-        is_flexible=False,
-        prices=[PRICE],
-        start_parameter="one-month-subscription",
-        payload="test-invoice-payload")
-
-
-# @dp.message_handler(commands=['buy_u'])
-# async def buy(message: types.Message):
-
 # ==========================================================================
 
 
 # ==========================================================================
-# --------------------- СЕРВЕРНАЯ ЧАСТЬ: ЛОГИРОВАНИЕ -----------------------
-
-@timing_decorator
-async def read_logs():
-    if os.path.exists(FILE_LOG):
-        logs_data = []
-        with open(FILE_LOG, mode="r", encoding='utf-8') as data:
-            logs_reader = DictReader(data, fieldnames=FIELDS_LOG, delimiter=';')
-            next(logs_reader)
-            for row in logs_reader:
-                logs_data.append(row)
-            data.close()
-        return logs_data
-    else:
-        return []
-# ==========================================================================
+# --------------------- СЕРВЕРНАЯ ЧАСТЬ -----------------------
 
 
 async def on_startup(dp):
@@ -1192,6 +1169,9 @@ async def on_startup(dp):
     )
     print(f'===== DEBUG: {DEBUG} =============================================')
     print(f'===== INSPIRA: {__version__}  =======================================')
+    tracer_l.tracer_charge(
+        "SYSTEM", 0, "on_startup",
+        "start the server")
 
 
 if __name__ == '__main__':
@@ -1201,14 +1181,20 @@ if __name__ == '__main__':
 
     except aiogram.utils.exceptions.TelegramAPIError as aiogram_critical_error:
         print("\n\n\n* !!! CRITICAL !!! * --- aiogram ---", aiogram_critical_error, "\n\n\n")
-        write_log(aiogram_critical_error, "CRITICAL")
+        tracer_l.tracer_charge(
+            "SYSTEM", 0, "aiogram.utils.exceptions.TelegramAPIError",
+            f"emergency reboot the server", "", f"{aiogram_critical_error}")
         ServerManager().emergency_reboot()
 
     except aiohttp.client_exceptions.ServerDisconnectedError as aiohttp_critical_error:
         print("\n\n\n* !!! CRITICAL !!! * --- aiohttp ---", aiohttp_critical_error, "\n\n\n")
-        write_log(aiohttp_critical_error, "CRITICAL")
+        tracer_l.tracer_charge(
+            "SYSTEM", 0, "aiohttp.client_exceptions.ServerDisconnectedError",
+            f"emergency reboot the server", "", f"{aiohttp_critical_error}")
         ServerManager().emergency_reboot()
 
-    except Exception as e:
-        write_log(f"Exception: {e}", "CRITICAL")
+    except Exception as critical:
+        tracer_l.tracer_charge(
+            "SYSTEM", 0, "Exception",
+            f"emergency reboot the server", "", f"{critical}")
         ServerManager().emergency_reboot()

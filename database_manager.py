@@ -418,6 +418,13 @@ class UserManager(DataBaseManager):
         else:
             return False
 
+    @staticmethod
+    def __format_phone(phone_number):
+        digits = ''.join(filter(str.isdigit, phone_number))
+
+        formatted_number = f"+{digits[0]} {digits[1:4]} {digits[4:7]} {digits[7:9]} {digits[9:11]}"
+        return formatted_number
+
     def find_users_in_db(self, id_user):
         """
             Поиск и выгрузка данных о пользователе из БД
@@ -428,15 +435,21 @@ class UserManager(DataBaseManager):
 
         if len(str(id_user)) <= 20:
             __cursor.execute("SELECT * FROM users WHERE user_id = ?", (id_user,))
-            find_users = __cursor.fetchone()
+            find_user = __cursor.fetchone()
 
             result = ''
-            if find_users:
-                for item in range(len(find_users)):
-                    if item == 0:
-                        result += f"[{find_users[item]}] "
-                    else:
-                        result += f"{find_users[item]} "
+            if find_user:
+                if find_user[6]:
+                    user_status = 'Активен'
+                else:
+                    user_status = 'Не активен'
+
+                result += f"Имя: {find_user[2]}\n"
+                result += f"Телефон: {self.__format_phone(find_user[3])}\n"
+                result += f"Статус: {user_status}\n\n"
+                result += f"<i>Обновлено {find_user[7]}</i>\n"
+                result += f"Дата регистрации: {find_user[5]}\n"
+
                 return result
             else:
                 __cursor.execute("SELECT * FROM users WHERE fullname = ?", (id_user,))
@@ -577,13 +590,6 @@ class UserManager(DataBaseManager):
         except Exception as e:
             print("---------- ERROR ----------")
             print(f"----- {e} while updating phone for {user_id} -----")
-
-    @staticmethod
-    def __format_number(phone_number) -> str:
-        str_phone_number = str(phone_number)
-        str_number = (f"+{str_phone_number[0]} {str_phone_number[1:4]} {str_phone_number[4:7]} {str_phone_number[8:10]} "
-                      f"{str_phone_number[11:12]} {str_phone_number[13:14]}")
-        return str_number
 
     def get_phone(self, user_id: int) -> str:
         try:
@@ -743,12 +749,12 @@ class LimitedUsersManager(DataBaseManager):
 
 
 class AdminsManager(DataBaseManager):
-    def grant_rights_to_admin(self, superuser_id: int, new_admin_id: int, security_clearance: str):
+    def add_new_admin(self, new_admin_id: int, security_clearance: str):
 
         admin_data_to_db = {
             "user_id": new_admin_id,
             "security_clearance": security_clearance,
-            "admin_status": "active"
+            "admin_status": True
         }
 
         try:

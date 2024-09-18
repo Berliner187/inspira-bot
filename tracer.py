@@ -57,7 +57,7 @@ class TracerManager:
                 logs.append(log_entry)
         return logs
 
-    def tracer_formatter_load(self):
+    def tracer_formatter_load(self) -> print:
         log_data = self.tracer_load()
         headers = ["Timestamp", "LOG LEVEL", "User ID", "Function", "Message Text", "Error Details", "Additional Info"]
 
@@ -85,8 +85,10 @@ class TracerManager:
                 color = self.__format_hex_color("#FF073A")
             elif log['log_level'] == 'ADMIN':
                 color = self.__format_hex_color("#2EE8BB")
+            elif log['log_level'] == 'SYSTEM':
+                color = self.__format_hex_color("#9B30FF")
             else:
-                color = self.__format_hex_color("#f0f0f0f")
+                color = self.__format_hex_color("#f0f0f0")
 
             log_line = [
                 log['timestamp'],
@@ -99,4 +101,4 @@ class TracerManager:
             ]
 
             log_format = " | ".join(f"{color}{{:<{width}}}{color}" for width in max_widths)
-            print(log_format.format(*log_line))
+            print(log_format.format(*log_line), self.__format_hex_color('#ffffff'))
