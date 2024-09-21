@@ -9,10 +9,15 @@ import sqlite3
 import aiosqlite
 
 from referral import RESOURCE_DICT
+from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 DEBUG = True
+
+
+# ============== ИНИЦИАЛИЗАЦИЯ ЛОГИРОВАНИЯ ==========================
+tracer_l = TracerManager(TRACER_FILE)
 
 
 INSPIRA_DB = 'inspira.db'
@@ -66,67 +71,149 @@ def get_format_date():
     return datetime.datetime.now().strftime("%d.%m.%Y-%H:%M:%S")
 
 
+class TemplatesTrackingEvents(TracerManager):
+    """
+        Шаблоны отображения отработавших событий в консоли.
+        Условие: DEBUG = True
+    """
+    def __init__(self, tracer_fields):
+        super().__init__(tracer_fields)
+
+    def _template_structure_message(self, status, message, more_info=''):
+        if DEBUG:
+            print(f"\n---------- {status} ----------")
+            print(message, more_info, self.default_color)
+
+    def event_success(self, message):
+        self._template_structure_message(f"{self.color_info}[ OK ]", message)
+
+    def event_warning(self, message, warning_message):
+        self._template_structure_message(f"{self.color_warning}[ WARNING ]", message, warning_message)
+
+    def event_error(self, message, error_message):
+        self._template_structure_message(f"{self.color_error}[ ERROR ]", message, error_message)
+
+    def event_handler(self, func):
+        """
+            Обработчик событий. Работает как декоратор.
+            :param func:
+            :return:
+        """
+        def wrapper(*args, **kwargs):
+            try:
+                result = func(*args, **kwargs)
+                self.event_success(func.__name__)
+                self.tracer_charge(
+                    "DB", 0,
+                    f"{func.__module__} -> {func.__name__}",
+                    "success")
+                return result
+            except TypeError or ValueError or KeyError or IndexError as warning:
+                self.event_warning(func.__name__, str(warning))
+                self.tracer_charge(
+                    "WARNING", 0,
+                    f"{func.__module__} -> {func.__name__}",
+                    "something went wrong", f"{warning}")
+                return None
+            except Exception as error:
+                self.event_error(func.__name__, str(error))
+                self.tracer_charge(
+                    "ERROR", 0,
+                    f"{func.__module__} -> {func.__name__}",
+                    "something went wrong", f"{error}")
+                raise
+
+        return wrapper
+
+
+templates_status_events = TemplatesTrackingEvents(TRACER_FILE)
+
+
 class DataBaseManager:
     def __init__(self, db_name):
         self.db_name = db_name
 
+    @staticmethod
+    def _sql_query_response_to_list(list_to_convert) -> list:
+        result = [item[0] for item in list_to_convert]
+        return result
+
+    def __check_table_for_exists(self, table_name) -> bool:
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        result = cursor.fetchone()
+        conn.close()
+
+        return result is not None
+
     def create_table(self, table_name: str, fields: list):
-        print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
-        print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
+        if self.__check_table_for_exists(table_name):
+            print(f"---- TABLE ({table_name}) in DATABASE ({self.db_name}) [ OK ] ----")
+        else:
+            print("=*=*=*=*=*=* WARNING =*=*=*=*=*=*")
+            print(f"---- CREATE TABLE ({table_name}) in DATABASE ({self.db_name}) [ CREATE ] ----")
+            try:
+                __conn = sqlite3.connect(self.db_name)
+                cur = __conn.cursor()
 
-        __conn = sqlite3.connect(self.db_name)
-        cur = __conn.cursor()
+                field_definitions = []
+                for field in fields:
+                    field_name = field['name']
+                    field_type = field['type']
+                    field_definitions.append(f'{field_name} {field_type}')
 
-        field_definitions = []
-        for field in fields:
-            field_name = field['name']
-            field_type = field['type']
-            field_definitions.append(f'{field_name} {field_type}')
+                field_definitions_str = ', '.join(field_definitions)
+                sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
 
-        field_definitions_str = ', '.join(field_definitions)
-        sql_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({field_definitions_str})'
+                cur.execute(sql_query)
+                __conn.commit()
+                __conn.close()
 
-        cur.execute(sql_query)
-        __conn.commit()
-        __conn.close()
+                print("----------- SUCCESS -----------")
+                tracer_l.tracer_charge(
+                    "DB", 0,
+                    f"{self.__module__} -> {self.create_table.__name__}",
+                    f"success create table – {table_name}")
+                sleep(.25)
+            except Exception as db_error:
+                tracer_l.tracer_charge(
+                    "DB", 0,
+                    f"{self.__module__} -> {self.create_table.__name__}",
+                    "error while trying create table", f"{db_error}")
 
-        print("----------- SUCCESS -----------")
-        sleep(.25)
-
+    @templates_status_events.event_handler
     def add_record(self, table_name: str, data: dict):
         """
             Алгоритм добавления записи в любую таблицу.
             :param table_name: Название таблицы, в которую будет добавлена запись.
             :param data: Словарь. Ключи - имена столбцов, значения - данные для вставки.
         """
-        try:
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join('?' * len(data))
-            values = tuple(data.values())
+        columns = ', '.join(data.keys())
+        placeholders = ', '.join('?' * len(data))
+        values = tuple(data.values())
 
-            if 'date_register' in data and data['date_register'] is None and data['user_status_date_upd'] is None:
-                now = datetime.datetime.now()
-                date_format = "%d-%m-%Y %H:%M:%S"
-                data['date_register'] = now.strftime(date_format)
-                data['user_status_date_upd'] = now.strftime(date_format)
+        if 'date_register' in data and data['date_register'] is None and data['user_status_date_upd'] is None:
+            now = datetime.datetime.now()
+            date_format = "%d-%m-%Y %H:%M:%S"
+            data['date_register'] = now.strftime(date_format)
+            data['user_status_date_upd'] = now.strftime(date_format)
 
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
-            cursor.execute(query, values)
-            conn.commit()
-            conn.close()
+        query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+        cursor.execute(query, values)
+        conn.commit()
+        conn.close()
 
-            if DEBUG:
-                print(f"\nDataBaseManager -> add_record to table '{table_name}'")
-                print(f"data: {data}")
-                print(f"values: {values}")
+        if DEBUG:
+            print(f"\nDataBaseManager -> add_record to table '{table_name}'")
+            print(f"data: {data}")
+            print(f"values: {values}")
 
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- add_record: {e} {table_name} -----")
-
+    @templates_status_events.event_handler
     def find_by_condition(self, table_name: str, condition: str = None):
         """
         Метод поиска записей по условию в указанной таблице.
@@ -134,32 +221,27 @@ class DataBaseManager:
         :param condition: Условие поиска (строка SQL). Например, "user_id = 123"
         :return: Список найденных записей (список кортежей).
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT * FROM {table_name}'
-            if condition:
-                query += f' WHERE {condition}'
+        query = f'SELECT * FROM {table_name}'
+        if condition:
+            query += f' WHERE {condition}'
 
-            cursor.execute(query)
-            results = cursor.fetchall()
-            conn.close()
+        cursor.execute(query)
+        results = cursor.fetchall()
+        conn.close()
 
-            if DEBUG:
-                print(f"\nDatabaseManager -> find_by_condition in table '{table_name}'")
-                print(f"query: {query}")
-                print(f"results: {results}")
+        if DEBUG:
+            print(f"\nDatabaseManager -> find_by_condition in table '{table_name}'")
+            print(f"query: {query}")
+            print(f"results: {results}")
 
-            return results
-
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while finding records in {table_name} -----")
-            return []
+        return results
 
 
 class ProductManager(DataBaseManager):
+    @templates_status_events.event_handler
     def update_user_group(self, user_id: int, group_number: str, initial_status: str):
         """
         Обновляет номер группы и начальный статус пользователя в базе данных.
@@ -194,6 +276,7 @@ class ProductManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while updating user group for {user_id} -----")
 
+    @templates_status_events.event_handler
     def update_product_id(self, user_id: int, product_id: int):
         """
             Обновляет номер изделия.
@@ -218,13 +301,14 @@ class ProductManager(DataBaseManager):
             conn.commit()
             conn.close()
 
-            print(f"SET product_id {product_id}  for {user_id}: OK")
+            if DEBUG:
+                print(f"SET product_id {product_id}  for {user_id}: OK")
 
         except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"/_-_/ SET product_id {product_id}  for {user_id}: FAIL\n\n{e}")
+            if DEBUG:
+                print(f"/_-_/ FAIL to SET product_id {product_id}  for {user_id}\n\n{e}")
 
-    @timing_decorator
+    @templates_status_events.event_handler
     def update_product_status(self, user_id: int, new_status: str):
         """
         Обновляет статус пользователя в базе данных.
@@ -255,6 +339,7 @@ class ProductManager(DataBaseManager):
             print(f"----- {e} while updating user status for {user_id} -----")
             return False
 
+    @templates_status_events.event_handler
     def get_product_status(self, user_id: int) -> str:
         """
             Получение статуса изделия.
@@ -278,71 +363,63 @@ class ProductManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while get user status for {user_id} -----")
 
+    @templates_status_events.event_handler
     def get_all_groups(self) -> list:
         """
             Получение списка всех групп из БД.
             :return: список всех сохраненных групп.
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT * FROM {PRODUCTS_TABLE_NAME}'
+        query = f'SELECT * FROM {PRODUCTS_TABLE_NAME}'
 
-            cursor.execute(query)
-            list_users_data = cursor.fetchall()
-            conn.close()
+        cursor.execute(query)
+        list_users_data = cursor.fetchall()
+        conn.close()
 
-            return list_users_data
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get all groups -----")
+        return list_users_data
 
+    @templates_status_events.event_handler
     def get_group(self, user_id: int):
         """
             Получение номера группы по идентификатору пользователя.
             :param user_id: уникальный идентификатор пользователя
             :return: номер группы
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT group_number FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
-            cursor.execute(query, (user_id,))
+        query = f'SELECT group_number FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (user_id,))
 
-            group_number = cursor.fetchone()[0]
-            conn.close()
+        group_number = cursor.fetchone()[0]
+        conn.close()
 
-            return group_number
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while find group by user -----")
+        return group_number
 
+    @templates_status_events.event_handler
     def find_all_users_from_group(self, group_number: str) -> list:
         """ TODO: Отрефакторить название
             Выгрузка и получение всех пользователей из БД.
             :param group_number: номер группы
             :return: список всех пользователей одной группы
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT user_id FROM {PRODUCTS_TABLE_NAME} WHERE group_number = ?'
-            cursor.execute(query, (group_number,))
+        query = f'SELECT user_id FROM {PRODUCTS_TABLE_NAME} WHERE group_number = ?'
+        cursor.execute(query, (group_number,))
 
-            list_users_data = cursor.fetchall()
+        list_users_data = cursor.fetchall()
 
-            conn.close()
-            list_users_data = [item[0] for item in list_users_data]
+        conn.close()
+        list_users_data = [item[0] for item in list_users_data]
 
-            return list_users_data
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while find all users from group -----")
+        return list_users_data
 
-    def get_user_card(self, user_id: int) -> dict:
+    @templates_status_events.event_handler
+    def get_user_product_card(self, user_id: int) -> dict:
         """
             Выгрузка и получение карточки пользователя:
             • номер изделия
@@ -352,52 +429,46 @@ class ProductManager(DataBaseManager):
             :param user_id: уникальный идентификатор пользователя
             :return: словарь вышеперечисленных данных
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT * FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
-            cursor.execute(query, (user_id,))
+        query = f'SELECT * FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (user_id,))
 
-            list_users_data = cursor.fetchone()
+        list_users_data = cursor.fetchone()
 
-            card_user = {
-                'product_id': list_users_data[1],
-                'product_status': list_users_data[2],
-                'group_id': list_users_data[4],
-                'update_product_status': list_users_data[5]
-            }
-            conn.close()
+        card_user = {
+            'product_id': list_users_data[1],
+            'product_status': list_users_data[2],
+            'group_id': list_users_data[4],
+            'update_product_status': list_users_data[5]
+        }
+        conn.close()
 
-            return card_user
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get user card -----")
+        return card_user
 
+    @templates_status_events.event_handler
     def get_product_id(self, user_id: int) -> str:
         """
             Получение номера изделия конкретного пользователя.
             :param user_id: уникальный идентификатор пользователя
             :return: номер изделия
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT product_id FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
-            cursor.execute(query, (user_id,))
+        query = f'SELECT product_id FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (user_id,))
 
-            user_product_id = str(cursor.fetchone())
-            conn.close()
+        user_product_id = str(cursor.fetchone())
+        conn.close()
 
-            return user_product_id[0]
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get user card -----")
+        return user_product_id[0]
 
 
 class UserManager(DataBaseManager):
 
+    @templates_status_events.event_handler
     def check_user_in_database(self, user_id: int):
         """
             Проверка пользователя на существование.
@@ -420,82 +491,51 @@ class UserManager(DataBaseManager):
 
     @staticmethod
     def __format_phone(phone_number):
-        digits = ''.join(filter(str.isdigit, phone_number))
+        try:
+            digits = ''.join(filter(str.isdigit, phone_number))
+            formatted_number = f"+{digits[0]} {digits[1:4]} {digits[4:7]} {digits[7:9]} {digits[9:11]}"
+            return formatted_number
+        except Exception:
+            return
 
-        formatted_number = f"+{digits[0]} {digits[1:4]} {digits[4:7]} {digits[7:9]} {digits[9:11]}"
-        return formatted_number
-
-    def find_users_in_db(self, id_user):
-        """
-            Поиск и выгрузка данных о пользователе из БД
-            id_user - идентификатор пользователя.
-            user_id или fullname.
-        """
+    @templates_status_events.event_handler
+    def get_user_data(self, user_id: int):
         __cursor = sqlite3.connect(self.db_name).cursor()
+        __cursor.execute(f"SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?", (user_id,))
 
-        if len(str(id_user)) <= 20:
-            __cursor.execute("SELECT * FROM users WHERE user_id = ?", (id_user,))
-            find_user = __cursor.fetchone()
+        find_admin = __cursor.fetchone()
 
-            result = ''
-            if find_user:
-                if find_user[6]:
-                    user_status = 'Активен'
-                else:
-                    user_status = 'Не активен'
+        return find_admin
 
-                result += f"Имя: {find_user[2]}\n"
-                result += f"Телефон: {self.__format_phone(find_user[3])}\n"
-                result += f"Статус: {user_status}\n\n"
-                result += f"<i>Обновлено {find_user[7]}</i>\n"
-                result += f"Дата регистрации: {find_user[5]}\n"
+    @templates_status_events.event_handler
+    def get_user_card(self, user_id: int, user_type: str):
+        """
+            Поиск и выгрузка данных о пользователе из БД.
+            :user_id - идентификатор пользователя
+            :user_type - тип пользователя: гость или администратор
+        """
+        find_user = self.get_user_data(user_id)
 
-                return result
+        result = ''
+        if find_user:
+            if find_user[6]:
+                user_status = 'Активен'
             else:
-                __cursor.execute("SELECT * FROM users WHERE fullname = ?", (id_user,))
-                fetch_by_name = __cursor.fetchall()
-                __cursor.close()
-                if fetch_by_name:
-                    if 0 < len(fetch_by_name) < 2:
-                        for items in fetch_by_name:
-                            for item in range(len(items)):
-                                if item == 0:
-                                    result += f"[{items[item]}] "
-                                else:
-                                    result += f"{items[item]} "
-                    else:
-                        for items in fetch_by_name:
-                            for item in items:
-                                result += f"{item} "
-                            result += '\n'
-                    return result
-                else:
-                    return False
-        else:
-            return "OverflowError: Python int too large to convert to SQLite INTEGER"
+                user_status = 'Не активен'
 
-    @timing_decorator
-    def load_all_users(self):
-        """
-            Display data about users from database
-            Only print
-            return: None
-        """
-        connect = sqlite3.connect(self.db_name)
-        cursor = connect.cursor()
+            result += f"Имя: {find_user[2]}\n"
+            result += f"Телефон: {self.__format_phone(find_user[3])}\n"
 
-        cursor.execute("SELECT * FROM users")
-        all_users = cursor.fetchall()
+            if user_type == 'user':
+                result += f"Статус: {user_status}\n\n"
+                result += f"<i>Обновлён {find_user[7]}</i>\n"
+                result += f"Дата регистрации: {find_user[5]}\n"
+            elif user_type == 'admin':
+                result += f"<i>Обновлён {find_user[7]}</i>\n"
 
-        for user in all_users:
-            for i in range(len(user)):
-                if i == len(user) - 1:
-                    print(user[i], end="")
-                else:
-                    print(user[i], end=" --- ")
-            print()
+            return result
 
-    @timing_decorator
+    @templates_status_events.event_handler
     def read_users_from_db(self):
         """
             Return all data about users from DB.
@@ -512,37 +552,21 @@ class UserManager(DataBaseManager):
 
         return all_users
 
-    @timing_decorator
+    @templates_status_events.event_handler
     def drop_user_from_db(self, _user_id):
         __connect = sqlite3.connect(self.db_name)
         __cursor = __connect.cursor()
 
-        __cursor.execute(f"DELETE FROM users WHERE user_id=?", (_user_id,))
+        __cursor.execute(f"DELETE FROM {USERS_TABLE_NAME} WHERE user_id = ?", (_user_id,))
+        __connect.commit()
+
+        __cursor.execute(f"DELETE FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?", (_user_id,))
         __connect.commit()
 
         __cursor.close()
         __connect.close()
 
-    @timing_decorator
-    def load_database(self, name_database, display=False):
-        """
-            Reading old database (users.db) and return list with info about users.
-            return: list - with users
-        """
-        _connect = sqlite3.connect(name_database)
-        _connect = _connect.cursor()
-        _connect.execute("SELECT * FROM users")
-        all_users = _connect.fetchall()
-
-        _connect.close()
-
-        if display:
-            for i in all_users:
-                print(i)
-
-        return all_users
-
-    @timing_decorator
+    @templates_status_events.event_handler
     def update_user_status(self, user_id: int, new_status: str):
         """
         Обновляет статус пользователя в базе данных.
@@ -571,60 +595,51 @@ class UserManager(DataBaseManager):
             print("---------- ERROR ----------")
             print(f"----- {e} while updating user status for {user_id} -----")
 
+    @templates_status_events.event_handler
     def update_contact_info(self, user_id: int, phone: str):
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = '''
-                UPDATE users
-                SET phone = ?
-                WHERE user_id = ?
-                '''
+        query = '''
+            UPDATE users
+            SET phone = ?
+            WHERE user_id = ?
+            '''
 
-            cursor.execute(query, (phone, user_id))
-            conn.commit()
-            conn.close()
+        cursor.execute(query, (phone, user_id))
+        conn.commit()
+        conn.close()
 
-            print(f"User {user_id} contact success updated")
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while updating phone for {user_id} -----")
+        print(f"User {user_id} contact success updated")
 
-    def get_phone(self, user_id: int) -> str:
-        try:
-            _connect = sqlite3.connect(self.db_name)
-            _cursor = _connect.cursor()
+    @templates_status_events.event_handler
+    def get_phone(self, user_id: int):
+        _connect = sqlite3.connect(self.db_name)
+        _cursor = _connect.cursor()
 
-            query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
-            _cursor.execute(query, (user_id,))
+        query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
+        _cursor.execute(query, (user_id,))
 
-            phone_from_user = _cursor.fetchone()[0]
-            _cursor.close()
-            _connect.close()
+        phone_from_user = _cursor.fetchone()
+        _cursor.close()
+        _connect.close()
 
-            return phone_from_user
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get phone from user -----")
+        return phone_from_user
 
+    @templates_status_events.event_handler
     def get_user_contact_info(self, user_id: int):
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?'
-            cursor.execute(query, (user_id,))
+        query = f'SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (user_id,))
 
-            user_contact_info = cursor.fetchone()
-            conn.close()
+        user_contact_info = cursor.fetchone()
+        conn.close()
 
-            user_contact_info_str = f"{user_contact_info[2]} – {user_contact_info[3]}"
+        user_contact_info_str = f"{user_contact_info[2]} – {user_contact_info[3]}"
 
-            return user_contact_info_str
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get contact info from user -----")
+        return user_contact_info_str
 
 
 class ReferralArrival(DataBaseManager):
@@ -749,7 +764,8 @@ class LimitedUsersManager(DataBaseManager):
 
 
 class AdminsManager(DataBaseManager):
-    def add_new_admin(self, new_admin_id: int, security_clearance: str):
+    @templates_status_events.event_handler
+    def add_new_admin(self, new_admin_id: int, security_clearance: str) -> None:
 
         admin_data_to_db = {
             "user_id": new_admin_id,
@@ -757,17 +773,22 @@ class AdminsManager(DataBaseManager):
             "admin_status": True
         }
 
-        try:
-            self.add_record(ADMINS_TABLE_NAME, admin_data_to_db)
+        self.add_record(ADMINS_TABLE_NAME, admin_data_to_db)
 
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while grant_rights_to_admin for {new_admin_id} -----")
-
+    @templates_status_events.event_handler
     def _get_security_clearance(self, user_id: int):
-        print(self.find_by_condition(ADMINS_TABLE_NAME, f"user_id = {user_id}"))
-        return 0
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
+        query = f'SELECT security_clearance FROM {ADMINS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (user_id,))
+
+        security_clearance = int(cursor.fetchone()[0])
+        conn.close()
+
+        return security_clearance
+
+    @templates_status_events.event_handler
     def check_security_clearance(self, user_id: int):
         security_clearances = {
             1: "Полный контроль и управление",
@@ -776,3 +797,42 @@ class AdminsManager(DataBaseManager):
         sc = self._get_security_clearance(user_id)
 
         return security_clearances[sc]
+
+    @templates_status_events.event_handler
+    def get_administrators_from_db(self):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = f'SELECT user_id FROM {ADMINS_TABLE_NAME} '
+        cursor.execute(query)
+
+        admin_list = self._sql_query_response_to_list(cursor.fetchall())
+        conn.close()
+
+        return admin_list
+
+    @templates_status_events.event_handler
+    def get_admin_status(self, admin_id: int):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = f'SELECT admin_status FROM {ADMINS_TABLE_NAME} WHERE user_id = ?'
+        cursor.execute(query, (admin_id,))
+
+        admin_status = self._sql_query_response_to_list(cursor.fetchone())
+        print(admin_status)
+        cursor.close()
+        conn.close()
+
+        return admin_status
+
+    @templates_status_events.event_handler
+    def drop_admin_from_db(self, admin_id: int):
+        __connect = sqlite3.connect(self.db_name)
+        __cursor = __connect.cursor()
+
+        __cursor.execute(f"DELETE FROM {ADMINS_TABLE_NAME} WHERE user_id = ?", (admin_id,))
+        __connect.commit()
+
+        __cursor.close()
+        __connect.close()
