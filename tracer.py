@@ -11,9 +11,17 @@ HEADERS_LOG_FILE = ["version", "log_level", "user_id", "function", "message_text
 class TracerManager:
     def __init__(self, log_file):
         self.log_file = log_file
+        self.default_color = self.format_hex_color("#FFFFFF")
+        self.color_info = self.format_hex_color("#CAFFBF")
+        self.color_warning = self.format_hex_color("#FFD6A5")
+        self.color_error = self.format_hex_color("#FFADAD")
+        self.color_critical = self.format_hex_color("#FF073A")
+        self.color_admin = self.format_hex_color("#2EE8BB")
+        self.color_system = self.format_hex_color("#9B30FF")
+        self.color_db = self.format_hex_color("#9FE2BF")
 
     @staticmethod
-    def __format_hex_color(hex_color):
+    def format_hex_color(hex_color):
         """ Получение цвета в формате HEX """
         r, g, b = [int(hex_color[item:item+2], 16) for item in range(1, len(hex_color), 2)]
         return f"\x1b[38;2;{r};{g};{b}m".format(**vars())
@@ -77,18 +85,20 @@ class TracerManager:
         print("-" * (sum(max_widths) + 3 * (len(headers) - 1)))
 
         for log in log_data:
-            if log['log_level'] == 'INFO':
-                color = self.__format_hex_color("#ffffff")
+            if log['log_level'] == 'WARNING':
+                color = self.color_warning
             elif log['log_level'] == 'ERROR':
-                color = self.__format_hex_color("#F10C45")
+                color = self.color_error
             elif log['log_level'] == 'CRITICAL':
-                color = self.__format_hex_color("#FF073A")
+                color = self.color_critical
             elif log['log_level'] == 'ADMIN':
-                color = self.__format_hex_color("#2EE8BB")
+                color = self.color_admin
             elif log['log_level'] == 'SYSTEM':
-                color = self.__format_hex_color("#9B30FF")
+                color = self.color_system
+            elif log['log_level'] == 'DB':
+                color = self.color_db
             else:
-                color = self.__format_hex_color("#f0f0f0")
+                color = self.color_info
 
             log_line = [
                 log['timestamp'],
@@ -101,4 +111,4 @@ class TracerManager:
             ]
 
             log_format = " | ".join(f"{color}{{:<{width}}}{color}" for width in max_widths)
-            print(log_format.format(*log_line), self.__format_hex_color('#ffffff'))
+            print(log_format.format(*log_line), self.format_hex_color('#ffffff'))
