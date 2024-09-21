@@ -31,14 +31,14 @@ from database_manager import *
 from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = '0.2.1'
+__version__ = '0.3.0'
 DEBUG = True
 
 
 try:
     with open('config.json') as config_file:
         _config = json.load(config_file)
-    exhibit = str(_config["telegram_beta_token"])
+    exhibit = str(_config["telegram_token"])
     superuser_id = _config["superuser_id"]
     PAYMENTS_TOKEN = _config["payment_token"]
 except Exception as e:
@@ -58,15 +58,15 @@ db_manager.create_table(REFERRALS_TABLE_NAME, FIELDS_FOR_REFERRALS)
 db_manager.create_table(LIMITED_USERS_TABLE_NAME, FIELDS_FOR_LIMITED_USERS)
 db_manager.create_table(ADMINS_TABLE_NAME, FIELDS_FOR_ADMINS)
 
-# ============== ИНИЦИАЛИЗАЦИЯ ЛОГИРОВАНИЯ ===========================
+# ============== ИНИЦИАЛИЗАЦИЯ ЛОГИРОВАНИЯ ==========================
 tracer_l = TracerManager(TRACER_FILE)
 
 # Локализация
 locale.setlocale(locale.LC_TIME, 'ru_RU.UTF-8')
 
 
-# ============================================================================
-# ------------------------- ЛИМИТ ЗАПРОСОВ от ПОЛЬЗОВАТЕЛЯ ---------------
+# ===================================================================
+# ----------------- ЛИМИТ ЗАПРОСОВ от ПОЛЬЗОВАТЕЛЯ ---------------
 user_requests = {}
 REQUEST_LIMIT = 12
 TIME_LIMIT = 32
@@ -78,13 +78,13 @@ notify_banned_users = []
 # ===========================
 # --- ШАБЛОННЫЕ СООБЩЕНИЯ ---
 ADMIN_PREFIX_TEXT = '⚠ CONTROL PANEL ⚠\n'
+USER_PREFIX_TEXT = '<b>Уважаемый гость!</b>\n'
 PRODUCT_STATUSES = {
     "RECEIVED": "Получено ✅",
     "DONE": "Ожидает получения 🟡",
     "WORK": "В работе ⌛",
     "WAIT": "Ожидается ввод"
 }
-USER_PREFIX_TEXT = '<b>Уважаемый гость!</b>\n'
 
 
 # Security
@@ -92,20 +92,20 @@ temporarily_blocked_users = {}
 user_messages = {}
 
 
-class Administrators:
-    def __init__(self, admin_list: list):
-        self.admin_list = admin_list
+class Administrators(AdminsManager):
+    def __init__(self, db_name):
+        super().__init__(db_name)
 
     async def sending_messages_to_admins(self, message: str, parse_mode='HTML', markup=None):
-        for _admin_user_id in self.admin_list:
+        for _admin_user_id in self.get_administrators_from_db():
             await bot.send_message(_admin_user_id, message, parse_mode=parse_mode, reply_markup=markup)
 
     def get_list_of_admins(self) -> list:
-        return self.admin_list
+        return self.get_administrators_from_db()
 
 
 # Инициализация администраторов
-administrators = Administrators(admin_list=[])
+administrators = Administrators(INSPIRA_DB)
 
 
 @timing_decorator
@@ -448,7 +448,7 @@ ADMIN_PANEL_BUTTONS = [
         [
             types.KeyboardButton(text="/GROUPS/"),
             types.KeyboardButton(text="/COMMANDS/"),
-            types.KeyboardButton(text="/3/")
+            types.KeyboardButton(text="/ADMINS/")
         ],
         [
             types.KeyboardButton(text="/USERS/"),
@@ -474,6 +474,8 @@ async def admin_panel(message: types.Message):
             "• Просматривать потребление системных ресурсов", reply_markup=keyboard, parse_mode='HTML')
         tracer_l.tracer_charge(
             'ADMIN', message.from_user.id, admin_panel.__name__, "admin in control panel")
+    else:
+        print('Enemy')
 
 
 class FormGroupProduct(StatesGroup):
@@ -525,7 +527,7 @@ async def process_product_number(message: types.Message, state: FSMContext):
         _db_manager.update_user_group(target_user_id, data['group'], "WAIT")
         _db_manager.update_product_id(target_user_id, data['product_id'])
 
-        await message.answer(
+        message_user_card = await message.answer(
             f"<b>Гость {target_user_id} добавлен</b>\n"
             f"Номер группы  – {data['group']}\n"
             f"Номер изделия – {data['product_id']}",
@@ -554,7 +556,7 @@ async def bring_the_product_to_work(callback_query: types.CallbackQuery):
         try:
             product_manager = ProductManager(INSPIRA_DB)
             product_manager.update_product_status(user_id, "WORK")
-            _user_card = product_manager.get_user_card(user_id)
+            _user_card = product_manager.get_user_product_card(user_id)
 
             await administrators.sending_messages_to_admins(
                 f"{ADMIN_PREFIX_TEXT}"
@@ -676,6 +678,29 @@ async def show_all_groups(message: types.Message):
         await drop_admin_message(message, _sent_message)
 
 
+@dp.message_handler(lambda message: message.text == '/ADMINS/')
+async def show_all_groups(message: types.Message):
+    if message.from_user.id in administrators.get_list_of_admins():
+
+        users_id_of_admins = administrators.get_list_of_admins()
+        users_man = UserManager(INSPIRA_DB)
+
+        markup = InlineKeyboardMarkup()
+
+        for admin_id in users_id_of_admins:
+            user_data = users_man.get_user_data(admin_id)
+            first_name = user_data[2]
+            last_name = user_data[3]
+            button = InlineKeyboardButton(f"{first_name} • {last_name}", callback_data=f"admin_card:{admin_id}")
+            markup.add(button)
+
+        _sent_message = await bot.send_message(
+            message.from_user.id,
+            f"{ADMIN_PREFIX_TEXT}СПИСОК ВСЕХ АДМИНИСТРАТОРОВ", reply_markup=markup, parse_mode='HTML')
+
+        await drop_admin_message(message, _sent_message)
+
+
 @dp.callback_query_handler(lambda c: c.data.startswith('list_all_users_by_group:'))
 async def list_all_users_by_group(callback_query: types.CallbackQuery):
     if callback_query.from_user.id in administrators.get_list_of_admins():
@@ -703,7 +728,7 @@ async def user_card(callback_query: types.CallbackQuery):
         user_id = int(callback_query.data.split(':')[1])
 
         product_manager = ProductManager(INSPIRA_DB)
-        card_user = product_manager.get_user_card(user_id)
+        card_user = product_manager.get_user_product_card(user_id)
 
         markup = InlineKeyboardMarkup()
 
@@ -813,7 +838,7 @@ async def show_all_users(message: types.Message):
             username = user[4]
             date = user[5]
 
-            users_from_db += f"[{id_in_db}]: ({str(date).split(' ')[0]}) {firstname}\n{user_id}\n"
+            users_from_db += f"[{id_in_db}]: ({str(date).split(' ')[1]}) {firstname}\n{user_id}\n"
             users_from_db_count += 1
 
             if users_from_db_count >= 20:
@@ -878,6 +903,19 @@ async def cmd_add_admin(message: types.Message):
     if message.from_user.id == superuser_id:
         await FormAddAdmin.admin_user_id.set()
         await message.reply("Введите user_id администратора, которого вы хотите добавить:")
+
+
+@dp.message_handler(commands=['drop_admin'])
+async def cmd_add_admin(message: types.Message):
+    if message.from_user.id == superuser_id:
+        selected_admin_id = int(message.text.split()[1])
+
+        try:
+            admin_man = AdminsManager(INSPIRA_DB)
+            admin_man.drop_admin_from_db(selected_admin_id)
+            await message.reply("[ OK ] ✅")
+        except Exception:
+            await message.reply("[ ERROR ] ❌")
 
 
 @dp.message_handler(state=FormAddAdmin.admin_user_id)
@@ -966,7 +1004,7 @@ async def req_in_db(message: types.Message):
             _user_id = message.text.split()[1]
 
         user_manager = UserManager(INSPIRA_DB)
-        find_users = user_manager.find_users_in_db(_user_id)
+        _user_card = user_manager.get_user_card(_user_id)
 
         try:
             status_user_in_bot = await limited_users_manager.check_user_for_block(_user_id)
@@ -974,15 +1012,14 @@ async def req_in_db(message: types.Message):
             await message.answer(f"➜ ERROR ➜\n\n{overflow}")
             return
 
-        if status_user_in_bot:
-            text_status_user_in_bot = '➜ (ЛИКВИДИРОВАН ❌)'
-        else:
-            text_status_user_in_bot = ''
-
-        if find_users:
+        if _user_card:
+            if status_user_in_bot:
+                text_status_user_in_bot = '➜ (ЛИКВИДИРОВАН ❌)'
+            else:
+                text_status_user_in_bot = ''
             sent_message = await message.answer(
                 f"➜ Карточка пользователя ➜\n\n"
-                f"{find_users}\n\n{text_status_user_in_bot}", parse_mode='HTML')
+                f"{_user_card}\n\n{text_status_user_in_bot}", parse_mode='HTML')
         else:
             sent_message = await message.answer(f"➜ USER not exist ❌")
 
@@ -1173,8 +1210,7 @@ async def on_startup(dp):
     print(f'===== DEBUG: {DEBUG} =============================================')
     print(f'===== INSPIRA: {__version__}  =======================================')
     tracer_l.tracer_charge(
-        "SYSTEM", 0, "on_startup",
-        "start the server")
+        "SYSTEM", 0, on_startup.__name__, "start the server")
 
 
 if __name__ == '__main__':
@@ -1185,19 +1221,19 @@ if __name__ == '__main__':
     except aiogram.utils.exceptions.TelegramAPIError as aiogram_critical_error:
         print("\n\n\n* !!! CRITICAL !!! * --- aiogram ---", aiogram_critical_error, "\n\n\n")
         tracer_l.tracer_charge(
-            "SYSTEM", 0, "aiogram.utils.exceptions.TelegramAPIError",
+            "CRITICAL", 0, "aiogram.utils.exceptions.TelegramAPIError",
             f"emergency reboot the server", "", f"{aiogram_critical_error}")
         ServerManager().emergency_reboot()
 
     except aiohttp.client_exceptions.ServerDisconnectedError as aiohttp_critical_error:
         print("\n\n\n* !!! CRITICAL !!! * --- aiohttp ---", aiohttp_critical_error, "\n\n\n")
         tracer_l.tracer_charge(
-            "SYSTEM", 0, "aiohttp.client_exceptions.ServerDisconnectedError",
-            f"emergency reboot the server", "", f"{aiohttp_critical_error}")
+            "CRITICAL", 0, "aiohttp.client_exceptions.ServerDisconnectedError",
+            f"emergency reboot the server", f"{aiohttp_critical_error}")
         ServerManager().emergency_reboot()
 
     except Exception as critical:
         tracer_l.tracer_charge(
-            "SYSTEM", 0, "Exception",
-            f"emergency reboot the server", "", f"{critical}")
+            "CRITICAL", 0, "Exception",
+            f"emergency reboot the server", str(critical))
         ServerManager().emergency_reboot()
