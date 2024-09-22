@@ -5,7 +5,7 @@ from typing import List, Dict
 
 
 TRACER_FILE = "logger.csv"
-HEADERS_LOG_FILE = ["version", "log_level", "user_id", "function", "message_text", "error_details", "additional_info"]
+HEADERS_LOG_FILE = ["timestamp", "log_level", "user_id", "function", "message_text", "error_details", "additional_info"]
 
 
 class TracerManager:
@@ -18,7 +18,7 @@ class TracerManager:
         self.color_critical = self.format_hex_color("#FF073A")
         self.color_admin = self.format_hex_color("#2EE8BB")
         self.color_system = self.format_hex_color("#9B30FF")
-        self.color_db = self.format_hex_color("#9FE2BF")
+        self.color_db = self.format_hex_color("#D4A3E2")
 
     @staticmethod
     def format_hex_color(hex_color):
