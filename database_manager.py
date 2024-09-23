@@ -81,8 +81,7 @@ class TemplatesTrackingEvents(TracerManager):
 
     def _template_structure_message(self, status, message, more_info=''):
         if DEBUG:
-            print(f"\n---------- {status} ----------")
-            print(message, more_info, self.default_color)
+            print(f"{status} -> {message} -- {more_info}", self.default_color)
 
     def event_success(self, message):
         self._template_structure_message(f"{self.color_info}[ OK ]", message)
@@ -249,9 +248,7 @@ class ProductManager(DataBaseManager):
         :param group_number: Новый номер группы, который нужно установить.
         :param initial_status: Начальный статус пользователя, по умолчанию "в процессе".
         """
-        if DEBUG:
-            print(f"Connecting to database: {self.db_name}")
-
+        print(f"Connecting to database: {self.db_name}")
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -284,7 +281,6 @@ class ProductManager(DataBaseManager):
             :param product_id: Уникальный номер изделия.
         """
         print(f"Connecting to database: {self.db_name}")
-
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
@@ -346,22 +342,17 @@ class ProductManager(DataBaseManager):
             :param user_id: уникальный идентификатор пользователя
             :return: статус изделия – НЕ НАЧАТ, В ПРОЦЕССЕ, ГОТОВО, ПОЛУЧЕНО
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            query = f'SELECT status FROM {PRODUCTS_TABLE_NAME}'
-            query += f' WHERE user_id = {user_id}'
+        query = f'SELECT status FROM {PRODUCTS_TABLE_NAME}'
+        query += f' WHERE user_id = {user_id}'
 
-            cursor.execute(query)
-            status = cursor.fetchone()[0]
-            conn.close()
+        cursor.execute(query)
+        status = cursor.fetchone()[0]
+        conn.close()
 
-            return status
-
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while get user status for {user_id} -----")
+        return status
 
     @templates_status_events.event_handler
     def get_all_groups(self) -> list:
@@ -573,27 +564,22 @@ class UserManager(DataBaseManager):
         :param user_id: ID пользователя, чей статус нужно обновить.
         :param new_status: Новый статус, который нужно установить.
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
 
-            now = datetime.datetime.now()
-            status_update_date = now.strftime("%d-%m-%Y %H:%M:%S")
+        now = datetime.datetime.now()
+        status_update_date = now.strftime("%d-%m-%Y %H:%M:%S")
 
-            query = '''
-                UPDATE users
-                SET status = ?, status_update_date = ?
-                WHERE user_id = ?
-            '''
-            cursor.execute(query, (new_status, status_update_date, user_id))
-            conn.commit()
-            conn.close()
+        query = '''
+            UPDATE users
+            SET status = ?, status_update_date = ?
+            WHERE user_id = ?
+        '''
+        cursor.execute(query, (new_status, status_update_date, user_id))
+        conn.commit()
+        conn.close()
 
-            print(f"User {user_id} status updated to '{new_status}' at {status_update_date}")
-
-        except Exception as e:
-            print("---------- ERROR ----------")
-            print(f"----- {e} while updating user status for {user_id} -----")
+        print(f"User {user_id} status updated to '{new_status}' at {status_update_date}")
 
     @templates_status_events.event_handler
     def update_contact_info(self, user_id: int, phone: str):
@@ -620,7 +606,7 @@ class UserManager(DataBaseManager):
         query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
         _cursor.execute(query, (user_id,))
 
-        phone_from_user = _cursor.fetchone()
+        phone_from_user = self._sql_query_response_to_list(_cursor.fetchone())
         _cursor.close()
         _connect.close()
 
@@ -736,15 +722,18 @@ class LimitedUsersManager(DataBaseManager):
                 return "/// USER not FOUND."
 
     @timing_decorator
-    async def fetch_all_users(self):
+    async def fetch_all_limited_users(self):
         async with aiosqlite.connect(self.db_name) as _conn:
             cursor = await _conn.execute(f"SELECT * FROM {LIMITED_USERS_TABLE_NAME}")
             records = await cursor.fetchall()
 
+            users_manager = UserManager(INSPIRA_DB)
+
             response = '/// BLACKLIST ///\n\n'
             if records:
                 for record in records:
-                    response += f'{record[0]} от {record[2]}\n'
+                    user_contact = users_manager.get_user_contact_info(record[0])
+                    response += f'{user_contact} от {record[2]}\n'
                 return response
             else:
                 response += "/// EMPTY ///"
@@ -836,3 +825,7 @@ class AdminsManager(DataBaseManager):
 
         __cursor.close()
         __connect.close()
+
+
+class StatControl(DataBaseManager):
+    pass

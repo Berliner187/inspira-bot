@@ -31,7 +31,7 @@ from database_manager import *
 from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 DEBUG = True
 
 
@@ -106,6 +106,22 @@ class Administrators(AdminsManager):
 
 # Инициализация администраторов
 administrators = Administrators(INSPIRA_DB)
+
+
+class ControlAccessConfirmedUsers:
+    def __init__(self):
+        pass
+
+    def check_access_user(self, user_id: int) -> bool:
+        users_manager = UserManager(INSPIRA_DB)
+        contact_user = users_manager.get_phone(user_id)
+        if contact_user is not None:
+            return True
+        else:
+            return False
+
+
+control_access_confirmed_users = ControlAccessConfirmedUsers()
 
 
 @timing_decorator
@@ -346,10 +362,9 @@ async def product_status(message: types.Message):
     tracer_l.tracer_charge(
         'INFO', message.from_user.id, product_status.__name__, "user check status of product")
 
-    user_manager = UserManager(INSPIRA_DB)
-    phone_from_user = user_manager.get_phone(message.from_user.id)
+    check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
-    if phone_from_user is None:
+    if check_phone is None:
         kb = [
             [
                 types.KeyboardButton(text="Заполнить контактную информацию"),
@@ -414,10 +429,6 @@ async def product_status(message: types.Message):
             'INFO', message.from_user.id, product_status.__name__, f"product status: {_status_product}")
 
 
-def standard_datetime_format():
-    return f"\n[{datetime.datetime.now().strftime('%H:%M:%S - %d.%m')}]"
-
-
 def format_number(num):
     return '{0:,}'.format(num).replace(",", " ")
 
@@ -466,7 +477,7 @@ async def admin_panel(message: types.Message):
         keyboard = types.ReplyKeyboardMarkup(keyboard=ADMIN_PANEL_BUTTONS, resize_keyboard=True)
         await message.reply(
             "[ INSPIRA • Admin Panel ]\n\n"
-            "<b>Панель администратора</b>\n"
+            "<b>Панель администратора</b>\n\n"
             "<i>Здесь Вы можете:\n"
             "• Назначать статусы изделий\n"
             "• Просматривать информацию о гостях и их действиях</i>\n"
@@ -487,16 +498,18 @@ class FormGroupProduct(StatesGroup):
 # @dp.message_handler(lambda message: "add_to_group" in message.text)
 @dp.callback_query_handler(lambda c: c.data.startswith('fill_guest_card:'))
 async def start_form(callback_query: types.CallbackQuery, state: FSMContext):
+    await construction_to_delete_messages(callback_query.message)
     user_id = int(callback_query.data.split(':')[1])
 
     tracer_l.tracer_charge(
         'ADMIN', callback_query.from_user.id, start_form.__name__,
         f"admin set group number for {user_id}")
 
-    await callback_query.message.answer(f"Введите номер группы для {user_id}")
+    sent_message = await callback_query.message.answer(f"Введите номер группы для {user_id}")
     async with state.proxy() as data:
         data['user_id'] = user_id
     await FormGroupProduct.group.set()
+    await drop_admin_message(callback_query.message, sent_message)
 
 
 @dp.message_handler(state=FormGroupProduct.group)
@@ -622,6 +635,11 @@ async def process_set_status_ready(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('product_has_been_received:'))
 async def process_product_confirm(callback_query: types.CallbackQuery):
+    """
+        Функция при подтверждении изделия пользователем
+        :param callback_query: default handler
+        :return: message to user and admin
+    """
     user_id = int(callback_query.data.split(':')[1])
 
     try:
@@ -655,32 +673,65 @@ async def process_product_confirm(callback_query: types.CallbackQuery):
                 f"fail while send finally message", f"{error}")
 
 
+GROUPS_PER_PAGE = 10  # Количество групп на странице алмина
+
+
 @dp.message_handler(lambda message: message.text == '/GROUPS/')
-async def show_all_groups(message: types.Message):
+async def show_all_groups(message: types.Message, page: int = 0):
     if message.from_user.id in administrators.get_list_of_admins():
         await construction_to_delete_messages(message)
+        print(f"Showing groups for page: {page}")
 
         product_manager = ProductManager(INSPIRA_DB)
-        list_users_data = product_manager.get_all_groups()
+        all_groups_list = product_manager.get_all_groups()
 
-        unique_groups = set(item[4] for item in list_users_data)
+        unique_groups = set(grop[4] for grop in all_groups_list)
         unique_groups_list = list(unique_groups)
 
+        total_pages = (len(unique_groups_list) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE
+        start_index = page * GROUPS_PER_PAGE
+        end_index = start_index + GROUPS_PER_PAGE
+        groups_to_display = unique_groups_list[start_index:end_index]
+
+        print(f"Total groups: {len(unique_groups_list)}, Total pages: {total_pages}, Groups on this page: {len(groups_to_display)}")
+
         markup = InlineKeyboardMarkup()
-        for group in unique_groups_list:
+        for group in groups_to_display:
             button = InlineKeyboardButton(f"ГРУППА {group}", callback_data=f"list_all_users_by_group:{group}")
             markup.add(button)
 
-        _sent_message = await bot.send_message(
-            message.from_user.id,
-            f"{ADMIN_PREFIX_TEXT}СПИСОК ВСЕХ ДОСТУПНЫХ ГРУПП", reply_markup=markup, parse_mode='HTML')
+        if page > 0:
+            markup.add(InlineKeyboardButton("Назад", callback_data=f"show_groups:{page - 1}"))
+        else:
+            markup.add(InlineKeyboardButton("Вперед", callback_data=f"show_groups:{page + 1}"))
 
-        await drop_admin_message(message, _sent_message)
+        if page == 0:
+            _sent_message = await bot.send_message(
+                message.from_user.id,
+                f"{ADMIN_PREFIX_TEXT}СПИСОК ВСЕХ ДОСТУПНЫХ ГРУПП", reply_markup=markup, parse_mode='HTML'
+            )
+            await drop_admin_message(message, _sent_message)
+        else:
+            await bot.edit_message_text(
+                f"{ADMIN_PREFIX_TEXT}СПИСОК ВСЕХ ДОСТУПНЫХ ГРУПП",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup,
+                parse_mode='HTML'
+            )
+
+
+@dp.callback_query_handler(lambda callback_query: callback_query.data.startswith("show_groups:"))
+async def handle_group_navigation(callback_query: types.CallbackQuery):
+    page = int(callback_query.data.split(":")[1])
+    await show_all_groups(callback_query.message, page)
+    await callback_query.answer()
 
 
 @dp.message_handler(lambda message: message.text == '/ADMINS/')
-async def show_all_groups(message: types.Message):
+async def show_all_admins(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
+        await construction_to_delete_messages(message)
 
         users_id_of_admins = administrators.get_list_of_admins()
         users_man = UserManager(INSPIRA_DB)
@@ -690,8 +741,8 @@ async def show_all_groups(message: types.Message):
         for admin_id in users_id_of_admins:
             user_data = users_man.get_user_data(admin_id)
             first_name = user_data[2]
-            last_name = user_data[3]
-            button = InlineKeyboardButton(f"{first_name} • {last_name}", callback_data=f"admin_card:{admin_id}")
+            phone_number = user_data[3]
+            button = InlineKeyboardButton(f"{first_name} • {phone_number}", callback_data=f"admin_card:{admin_id}")
             markup.add(button)
 
         _sent_message = await bot.send_message(
@@ -704,6 +755,8 @@ async def show_all_groups(message: types.Message):
 @dp.callback_query_handler(lambda c: c.data.startswith('list_all_users_by_group:'))
 async def list_all_users_by_group(callback_query: types.CallbackQuery):
     if callback_query.from_user.id in administrators.get_list_of_admins():
+        await construction_to_delete_messages(callback_query.message)
+
         group_number = callback_query.data.split(':')[1]
 
         product_manager = ProductManager(INSPIRA_DB)
@@ -720,48 +773,58 @@ async def list_all_users_by_group(callback_query: types.CallbackQuery):
         _sent_message = await bot.send_message(
             callback_query.from_user.id,
             f"{ADMIN_PREFIX_TEXT}ГРУППА {group_number}", reply_markup=markup, parse_mode='HTML')
+        await drop_admin_message(callback_query.message, _sent_message)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('user_card:'))
 async def user_card(callback_query: types.CallbackQuery):
     if callback_query.from_user.id in administrators.get_list_of_admins():
-        user_id = int(callback_query.data.split(':')[1])
+        await construction_to_delete_messages(callback_query.message)
+        selected_user_id = int(callback_query.data.split(':')[1])
 
         product_manager = ProductManager(INSPIRA_DB)
-        card_user = product_manager.get_user_product_card(user_id)
+        product_card_user = product_manager.get_user_product_card(selected_user_id)
+
+        users_manager = UserManager(INSPIRA_DB)
+        user_phone = users_manager.get_phone(selected_user_id)
+        get_user_contact_info = users_manager.get_user_contact_info(selected_user_id)
+
+        status_confirmed_user = "✅" if user_phone is not None else "⚠️"
 
         markup = InlineKeyboardMarkup()
 
-        if card_user['product_status'] == 'WAIT':
+        if product_card_user['product_status'] == 'WAIT':
             ready_button = InlineKeyboardButton(
-                f"ПРИВЕСТИ ИЗДЕЛИЕ В РАБОТУ", callback_data=f"bring_the_product_to_work:{user_id}")
+                f"ПРИВЕСТИ ИЗДЕЛИЕ В РАБОТУ", callback_data=f"bring_the_product_to_work:{selected_user_id}")
             markup.add(ready_button)
 
-        elif card_user['product_status'] == 'WORK':
+        elif product_card_user['product_status'] == 'WORK':
             ready_button = InlineKeyboardButton(
-                f"ПРИВЕСТИ ИЗДЕЛИЕ К ПОЛУЧЕНИЮ", callback_data=f"set_status_ready:{user_id}")
+                f"ПРИВЕСТИ ИЗДЕЛИЕ К ПОЛУЧЕНИЮ", callback_data=f"set_status_ready:{selected_user_id}")
             markup.add(ready_button)
+
+        ready_button = InlineKeyboardButton(
+            f"ЗАПОЛНИТЬ ЗАНОВО", callback_data=f"fill_guest_card:{selected_user_id}")
+        markup.add(ready_button)
 
         try:
             _sent_message = await bot.send_message(
                 callback_query.from_user.id,
-                f"Карточка гостя <b>{user_id}</b>\n\n"
-                f"Номер изделия: <b>{card_user['product_id']}</b>\n"
-                f"Статус изделия: <b>{PRODUCT_STATUSES[card_user['product_status']]}</b>\n"
-                f"Группа: <b>{card_user['group_id']}</b>\n\n"
-                f"<i>Статус обновлен <b>{card_user['update_product_status']}</b></i>",
+                f"Карточка гостя <b>{get_user_contact_info}</b> {status_confirmed_user}\n\n"
+                f"ID: {selected_user_id}\n"
+                f"Номер изделия: <b>{product_card_user['product_id']}</b>\n"
+                f"Статус изделия: <b>{PRODUCT_STATUSES[product_card_user['product_status']]}</b>\n"
+                f"Группа: <b>{product_card_user['group_id']}</b>\n\n"
+                f"<i>Статус обновлен <b>{product_card_user['update_product_status']}</b></i>",
                 reply_markup=markup, parse_mode='HTML')
 
             tracer_l.tracer_charge(
                 "ADMIN", callback_query.from_user.id, user_card.__name__,
-                f"success load the guest card: {user_id}")
+                f"success load the guest card: {selected_user_id}")
 
         except Exception as error:
-            ready_button = InlineKeyboardButton(
-                f"ЗАПОЛНИТЬ ЗАНОВО", callback_data=f"fill_guest_card:{user_id}")
-            markup.add(ready_button)
 
-            await bot.send_message(
+            _sent_message = await bot.send_message(
                 callback_query.from_user.id,
                 f"<b>Ошибочка :(</b>\n\n"
                 f"Попробуйте заполнить карточку гостя заново",
@@ -769,7 +832,30 @@ async def user_card(callback_query: types.CallbackQuery):
 
             tracer_l.tracer_charge(
                 "ERROR", callback_query.from_user.id, user_card.__name__,
-                f"error load the guest card: {user_id}", f"{error}")
+                f"error load the guest card: {selected_user_id}", f"{error}")
+        await drop_admin_message(callback_query.message, _sent_message)
+
+
+@dp.message_handler(lambda message: message.text == '/COMMANDS/')
+async def show_all_commands(message: types.Message):
+    if message.from_user.id in administrators.get_list_of_admins():
+        await construction_to_delete_messages(message)
+
+        dict_commands = {
+            "/inspira": "панель администратора",
+            "/block <user_id>": "блокировка пользователя по ID",
+            "/sms <user_id>": "отправить пользователю сообщение",
+            "/limited_users": "просмотреть список заблокированных пользователей"
+        }
+
+        commands_to_out = ""
+        for command, disc in dict_commands.items():
+            commands_to_out += f"{command} – {disc}\n"
+
+        _sent_message = await bot.send_message(
+            message.from_user.id, f"{ADMIN_PREFIX_TEXT}{commands_to_out}")
+
+        await drop_admin_message(message, _sent_message)
 
 
 @dp.message_handler(lambda message: message.text == '/LOGS/')
@@ -869,31 +955,6 @@ async def monitor_process(message: types.Message):
             await message.answer("Ошибка импортирования модуля", e)
 
 
-@dp.message_handler(lambda message: message.text == '/OTHER/')
-async def other_commands(message: types.Message):
-    if message.from_user.id in administrators.get_list_of_admins():
-        await construction_to_delete_messages(message)
-        commands = '// COMMANDS //\n\n'
-        commands += '/black_list - (c)\n' \
-                    '/block - (c, i)\n' \
-                    '/unblock - (c, i)\n' \
-                    '/sms - (c, i, m)\n' \
-                    '/sms_video - (c, video, i)' \
-                    '/stop_all - (c)\n\n' \
-                    '/referral - (c)\n' \
-                    '/c - (c)\n' \
-                    '/i - (c, i)\n' \
-                    '/l - (c, i)\n\n' \
-                    '/price_p - (c, i, p)\n' \
-                    '/address_p - (c, i, a)\n\n' \
-                    '/all - (c, m)\n' \
-                    '/rates - (c)\n\n' \
-                    '/rate_user - (c, id) ' \
-                    '/rate_all - (c)\n\n'
-        sent_message = await message.answer(commands)
-        await drop_admin_message(message, sent_message)
-
-
 class FormAddAdmin(StatesGroup):
     admin_user_id = State()
 
@@ -925,16 +986,23 @@ async def process_add_new_admin(message: types.Message, state: FSMContext):
 
         try:
             admins_manager = AdminsManager(INSPIRA_DB)
-            admins_manager.add_new_admin(admin_user_id, "2")
+
+            if message.from_user.id == superuser_id:
+                security_clearance = "1"
+            else:
+                security_clearance = "2"
+
+            admins_manager.add_new_admin(admin_user_id, security_clearance)
 
             await message.reply(f"Администратор с user_id {admin_user_id} добавлен.")
             await state.finish()
             tracer_l.tracer_charge(
                 "ADMIN", message.from_user.id, process_add_new_admin.__name__,
-                f"add new admin is success: {admin_user_id}")
+                f"add new admin: {admin_user_id}")
 
-            await bot.send_message(admin_user_id, f"{ADMIN_PREFIX_TEXT}Вы добавлены как в группу администраторов\n\n"
-                                                  f"Чтобы открыть панель управления, нажмите /inspira")
+            await bot.send_message(
+                admin_user_id, f"{ADMIN_PREFIX_TEXT}Вам предоставлены права администратора\n\n"
+                               f"Чтобы открыть панель управления, нажмите /inspira")
 
         except Exception as error:
             tracer_l.tracer_charge(
@@ -950,7 +1018,7 @@ async def blacklist_cat_users(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         await construction_to_delete_messages(message)
 
-        blocked_users = await limited_users_manager.fetch_all_users()
+        blocked_users = await limited_users_manager.fetch_all_limited_users()
         sent_message = await message.answer(blocked_users)
 
         await drop_admin_message(message, sent_message)
