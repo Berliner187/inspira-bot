@@ -31,7 +31,7 @@ from database_manager import *
 from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = '0.3.2'
+__version__ = '0.3.3'
 DEBUG = True
 
 
@@ -620,6 +620,7 @@ async def bring_the_product_to_work(callback_query: types.CallbackQuery):
         tracer_l.tracer_charge(
             'WARNING', callback_query.from_user.id, bring_the_product_to_work.__name__,
             f"user try to check this function")
+        await drop_admin_message(callback_query.message, _sent_message)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('set_status_ready:'))
@@ -807,7 +808,7 @@ async def user_card(callback_query: types.CallbackQuery):
 
         product_manager = ProductManager(INSPIRA_DB)
         product_card_user = product_manager.get_user_product_card(selected_user_id)
-        product_card_user_text = product_manager.get_user_product_card_for_display(product_card_user, RESOURCE_DICT)
+        product_card_user_text = product_manager.get_user_product_card_for_display(product_card_user, PRODUCT_STATUSES)
 
         users_manager = UserManager(INSPIRA_DB)
         user_phone = users_manager.get_phone(selected_user_id)
