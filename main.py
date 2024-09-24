@@ -31,7 +31,7 @@ from database_manager import *
 from tracer import TracerManager, TRACER_FILE
 
 
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 DEBUG = True
 
 
@@ -112,7 +112,8 @@ class ControlAccessConfirmedUsers:
     def __init__(self):
         pass
 
-    def check_access_user(self, user_id: int) -> bool:
+    @staticmethod
+    def check_access_user(user_id: int) -> bool:
         users_manager = UserManager(INSPIRA_DB)
         contact_user = users_manager.get_phone(user_id)
         if contact_user is not None:
@@ -364,7 +365,7 @@ async def product_status(message: types.Message):
 
     check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
-    if check_phone is None:
+    if check_phone is False:
         kb = [
             [
                 types.KeyboardButton(text="Заполнить контактную информацию"),
@@ -498,25 +499,34 @@ class FormGroupProduct(StatesGroup):
 # @dp.message_handler(lambda message: "add_to_group" in message.text)
 @dp.callback_query_handler(lambda c: c.data.startswith('fill_guest_card:'))
 async def start_form(callback_query: types.CallbackQuery, state: FSMContext):
-    await construction_to_delete_messages(callback_query.message)
     user_id = int(callback_query.data.split(':')[1])
 
     tracer_l.tracer_charge(
         'ADMIN', callback_query.from_user.id, start_form.__name__,
         f"admin set group number for {user_id}")
 
-    sent_message = await callback_query.message.answer(f"Введите номер группы для {user_id}")
+    user_manager = UserManager(INSPIRA_DB)
+    guest_contact = user_manager.get_user_contact_info(user_id)
+
+    await callback_query.message.answer(
+        f"<b>ПРОГРЕСС 1/2</b>\nВведите номер группы гостя {guest_contact}", parse_mode='HTML')
+
     async with state.proxy() as data:
         data['user_id'] = user_id
     await FormGroupProduct.group.set()
-    await drop_admin_message(callback_query.message, sent_message)
 
 
 @dp.message_handler(state=FormGroupProduct.group)
 async def process_group(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['group'] = message.text
-    await message.answer(f"Теперь введите номер изделия для {data['user_id']}")
+
+    user_manager = UserManager(INSPIRA_DB)
+    guest_contact = user_manager.get_user_contact_info(data['user_id'])
+
+    await message.answer(
+        f"<b>ПРОГРЕСС 2/2</b>\nВведите номер изделия гостя {guest_contact}", parse_mode='HTML')
+
     await FormGroupProduct.product_id.set()
 
 
@@ -535,15 +545,26 @@ async def process_product_number(message: types.Message, state: FSMContext):
         "ПРИВЕСТИ ИЗДЕЛИЕ В РАБОТУ", callback_data=f"bring_the_product_to_work:{target_user_id}")
     markup.add(ready_button)
 
+    guest_product_card_text = f"<b>Сохранено!</b>\n\n"
+    guest_product_card_text += f"Номер группы  – {data['group']}\n"
+    guest_product_card_text += f"Номер изделия – {data['product_id']}\n\n"
+
+    check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
+
+    guest_product_card_text += '<i>Телефон '
+    if check_phone:
+        guest_product_card_text += 'подтверждён ✅'
+    else:
+        guest_product_card_text += 'не подтверждён ⚠️'
+    guest_product_card_text += '</i>'
+
     try:
         _db_manager = ProductManager(INSPIRA_DB)
         _db_manager.update_user_group(target_user_id, data['group'], "WAIT")
         _db_manager.update_product_id(target_user_id, data['product_id'])
 
-        message_user_card = await message.answer(
-            f"<b>Гость {target_user_id} добавлен</b>\n"
-            f"Номер группы  – {data['group']}\n"
-            f"Номер изделия – {data['product_id']}",
+        await message.answer(
+            guest_product_card_text,
             reply_markup=markup, parse_mode='HTML'
         )
 
@@ -558,7 +579,7 @@ async def process_product_number(message: types.Message, state: FSMContext):
             'ERROR', message.from_user.id, process_product_number.__name__,
             f"FAIL while filled user card {target_user_id}", f"{e}")
 
-        await message.answer(f"Ошибка! Попробуйте заново\n\n{er}")
+        await message.answer(f"<b>Не удалось сохранить T_T</b>\nПопробуйте заново\n\n{er}", parse_mode='HTML')
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('bring_the_product_to_work:'))
@@ -569,23 +590,25 @@ async def bring_the_product_to_work(callback_query: types.CallbackQuery):
         try:
             product_manager = ProductManager(INSPIRA_DB)
             product_manager.update_product_status(user_id, "WORK")
-            _user_card = product_manager.get_user_product_card(user_id)
+            user_product_card_dict = product_manager.get_user_product_card(user_id=user_id)
+            user_product_card_text = product_manager.get_user_product_card_for_display(user_product_card_dict, PRODUCT_STATUSES)
 
             await administrators.sending_messages_to_admins(
-                f"{ADMIN_PREFIX_TEXT}"
-                f"<b>ПРИНЯТО В РАБОТУ</b>\n\n"
-                f"• Статус изделия: <b>{PRODUCT_STATUSES[_user_card['product_status']]}</b>\n"
-                f"• Номер группы: <b>{_user_card['group_id']}</b>\n\n"
-                f"<i>Обновлено {_user_card['update_product_status']}</i>"
-            )
+                f"{ADMIN_PREFIX_TEXT}<b>ПРИНЯТО В РАБОТУ</b>\n{user_id}\n{user_product_card_text}")
 
-            await bot.send_message(
-                user_id,
-                f"{USER_PREFIX_TEXT}"
-                f"Ваше изделие принято в работу!\n\n"
-                f"<i>Вам придёт уведомление о готовности</i>",
-                parse_mode='HTML'
-            )
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"{USER_PREFIX_TEXT}"
+                    f"Ваше изделие принято в работу!\n\n"
+                    f"<i>Вам придёт уведомление о готовности</i>",
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                tracer_l.tracer_charge(
+                    'ERROR', callback_query.from_user.id, bring_the_product_to_work.__name__,
+                    f"error while trying send message to {user_id}")
+
             tracer_l.tracer_charge(
                 'ADMIN', callback_query.from_user.id, bring_the_product_to_work.__name__,
                 f"product status for {user_id}: in process")
@@ -784,6 +807,7 @@ async def user_card(callback_query: types.CallbackQuery):
 
         product_manager = ProductManager(INSPIRA_DB)
         product_card_user = product_manager.get_user_product_card(selected_user_id)
+        product_card_user_text = product_manager.get_user_product_card_for_display(product_card_user, RESOURCE_DICT)
 
         users_manager = UserManager(INSPIRA_DB)
         user_phone = users_manager.get_phone(selected_user_id)
@@ -812,10 +836,7 @@ async def user_card(callback_query: types.CallbackQuery):
                 callback_query.from_user.id,
                 f"Карточка гостя <b>{get_user_contact_info}</b> {status_confirmed_user}\n\n"
                 f"ID: {selected_user_id}\n"
-                f"Номер изделия: <b>{product_card_user['product_id']}</b>\n"
-                f"Статус изделия: <b>{PRODUCT_STATUSES[product_card_user['product_status']]}</b>\n"
-                f"Группа: <b>{product_card_user['group_id']}</b>\n\n"
-                f"<i>Статус обновлен <b>{product_card_user['update_product_status']}</b></i>",
+                f"{product_card_user_text}",
                 reply_markup=markup, parse_mode='HTML')
 
             tracer_l.tracer_charge(
@@ -845,7 +866,8 @@ async def show_all_commands(message: types.Message):
             "/inspira": "панель администратора",
             "/block <user_id>": "блокировка пользователя по ID",
             "/sms <user_id>": "отправить пользователю сообщение",
-            "/limited_users": "просмотреть список заблокированных пользователей"
+            "/limited_users": "просмотреть список заблокированных пользователей",
+            "/i": "показать карточку пользователю"
         }
 
         commands_to_out = ""
@@ -1065,14 +1087,15 @@ async def unblock_user(message: types.Message):
 async def req_in_db(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         await construction_to_delete_messages(message)
-
-        try:
-            _user_id = int(message.text.split()[1])
-        except ValueError:
-            _user_id = message.text.split()[1]
+        _user_id = int(message.text.split()[1])
 
         user_manager = UserManager(INSPIRA_DB)
-        _user_card = user_manager.get_user_card(_user_id)
+        _user_card = user_manager.get_user_card(_user_id, 'user')
+
+        products_manager = ProductManager(INSPIRA_DB)
+        user_product_card = products_manager.get_user_product_card(user_id=_user_id)
+
+        _user_card += products_manager.get_user_product_card_for_display(user_product_card, PRODUCT_STATUSES)
 
         try:
             status_user_in_bot = await limited_users_manager.check_user_for_block(_user_id)

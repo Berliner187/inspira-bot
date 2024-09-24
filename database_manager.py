@@ -412,31 +412,51 @@ class ProductManager(DataBaseManager):
     @templates_status_events.event_handler
     def get_user_product_card(self, user_id: int) -> dict:
         """
-            Выгрузка и получение карточки пользователя:
-            • номер изделия
-            • статус изделия
-            • номер группы
-            • дата обновления записей
-            :param user_id: уникальный идентификатор пользователя
-            :return: словарь вышеперечисленных данных
+        Выгрузка и получение карточки пользователя:
+        • номер изделия
+        • статус изделия
+        • номер группы
+        • дата обновления записей
+        :param user_id: уникальный идентификатор пользователя
+        :return: словарь вышеперечисленных данных
         """
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        # Используем контекстный менеджер для автоматического закрытия соединения
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
 
-        query = f'SELECT * FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
-        cursor.execute(query, (user_id,))
+            query = f'SELECT product_id, status, group_number, status_update_date FROM {PRODUCTS_TABLE_NAME} WHERE user_id = ?'
+            cursor.execute(query, (user_id,))
 
-        list_users_data = cursor.fetchone()
+            list_users_data = cursor.fetchone()
 
-        card_user = {
-            'product_id': list_users_data[1],
-            'product_status': list_users_data[2],
-            'group_id': list_users_data[4],
-            'update_product_status': list_users_data[5]
+        if list_users_data is None:
+            return {
+                'product_id': 'пусто',
+                'product_status': 'пусто',
+                'group_id': 'пусто',
+                'status_update_date': 'пусто'
+            }
+
+        return {
+            'product_id': list_users_data[0],
+            'product_status': list_users_data[1],
+            'group_id': list_users_data[2],
+            'status_update_date': list_users_data[3]
         }
-        conn.close()
 
-        return card_user
+    @staticmethod
+    def get_user_product_card_for_display(user_product_card: dict, product_statuses: dict) -> str:
+        if not user_product_card:
+            return "Карточка пользователя не найдена."
+
+        user_product_card_display = (
+            f"\n• Статус изделия: <b>{product_statuses.get(user_product_card['product_status'], 'Не определён')}</b>\n"
+            f"• Номер группы: <b>{user_product_card['group_id']}</b>\n"
+            f"• Номер изделия: <b>{user_product_card['product_id']}</b>\n\n"
+            f"<i>Обновлено {user_product_card['status_update_date']}</i>"
+        )
+
+        return user_product_card_display
 
     @templates_status_events.event_handler
     def get_product_id(self, user_id: int) -> str:
@@ -494,9 +514,10 @@ class UserManager(DataBaseManager):
         __cursor = sqlite3.connect(self.db_name).cursor()
         __cursor.execute(f"SELECT * FROM {USERS_TABLE_NAME} WHERE user_id = ?", (user_id,))
 
-        find_admin = __cursor.fetchone()
+        find_user = __cursor.fetchone()
+        print(find_user)
 
-        return find_admin
+        return find_user
 
     @templates_status_events.event_handler
     def get_user_card(self, user_id: int, user_type: str):
@@ -623,7 +644,12 @@ class UserManager(DataBaseManager):
         user_contact_info = cursor.fetchone()
         conn.close()
 
-        user_contact_info_str = f"{user_contact_info[2]} – {user_contact_info[3]}"
+        if user_contact_info[3] is None:
+            phone_from_user = '-'
+        else:
+            phone_from_user = user_contact_info[3]
+
+        user_contact_info_str = f"{user_contact_info[2]} – {phone_from_user}"
 
         return user_contact_info_str
 
