@@ -13,12 +13,12 @@ class TracerManager:
         self.log_file = log_file
         self.default_color = self.format_hex_color("#FFFFFF")
         self.color_info = self.format_hex_color("#CAFFBF")
-        self.color_warning = self.format_hex_color("#FFD6A5")
-        self.color_error = self.format_hex_color("#FFADAD")
+        self.color_warning = self.format_hex_color("#FBC330")
+        self.color_error = self.format_hex_color("#F10C45")
         self.color_critical = self.format_hex_color("#FF073A")
         self.color_admin = self.format_hex_color("#2EE8BB")
         self.color_system = self.format_hex_color("#9B30FF")
-        self.color_db = self.format_hex_color("#D4A3E2")
+        self.color_db = self.format_hex_color("#4F48EC")
 
     @staticmethod
     def format_hex_color(hex_color):

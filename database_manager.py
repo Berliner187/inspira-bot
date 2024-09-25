@@ -450,7 +450,7 @@ class ProductManager(DataBaseManager):
             return "Карточка пользователя не найдена."
 
         user_product_card_display = (
-            f"\n• Статус изделия: <b>{product_statuses.get(user_product_card['product_status'], 'Не определён')}</b>\n"
+            f"\n• Статус изделия: <b>{product_statuses.get(user_product_card['product_status'], 'Не задан')}</b>\n"
             f"• Номер группы: <b>{user_product_card['group_id']}</b>\n"
             f"• Номер изделия: <b>{user_product_card['product_id']}</b>\n\n"
             f"<i>Обновлено {user_product_card['status_update_date']}</i>"
