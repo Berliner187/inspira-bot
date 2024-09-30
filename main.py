@@ -28,10 +28,13 @@ import aiosqlite
 
 from server_info import timing_decorator
 from database_manager import *
+from forms import *
+
 from tracer import TracerManager, TRACER_FILE
+from customer_registrations import ManagerCustomerReg
 
 
-__version__ = '0.3.3'
+__version__ = '0.4.0'
 DEBUG = True
 
 
@@ -85,6 +88,7 @@ PRODUCT_STATUSES = {
     "WORK": "В работе ⌛",
     "WAIT": "Ожидается ввод"
 }
+CONFIRM_SYMBOL = "✅"
 
 
 # Security
@@ -244,8 +248,7 @@ async def start_message(message: types.Message):
 
         wait_message = await message.answer(
             "<b>➔ INSPIRA</b>\n"
-            "Creative workshop\n\n"
-            "<b>↧ DESIGN by </b>KOZAK\n",
+            "Creative workshop\n\n",
             parse_mode='HTML'
         )
         await check_user_data(message)
@@ -288,7 +291,7 @@ async def start_message(message: types.Message):
                 message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
                 reply_markup=keyboard, parse_mode='HTML',
                 caption=f'<b>INSPIRA – искусство живет здесь.</b>\n\n'
-                        f'Привет! Это Бот Inspira - тут ты можешь записаться на мастер-класс по гончарному делу, '
+                        f'Привет! Это Бот Inspira – тут ты можешь записаться на мастер-класс по гончарному делу, '
                         f'а также узнать о готовности твоего изделия')
             tracer_l.tracer_charge(
                 'INFO', message.from_user.id, '/start', "user received start message")
@@ -299,6 +302,25 @@ async def start_message(message: types.Message):
         await wait_message.delete()
 
 
+@dp.message_handler(commands=['help'])
+async def help_user(message: types.Message):
+    # =========== ПРОВЕРКА ДОПУСКА ПОЛЬЗОВАТЕЛЯ ================
+    if await check_ban_users(message.from_user.id) is not True:
+        tracer_l.tracer_charge(
+            'INFO', message.from_user.id, help_user.__name__, "user in help")
+
+        url_kb = InlineKeyboardMarkup(row_width=2)
+        url_help = InlineKeyboardButton(text='Поддержка', url='https://google.com')
+        url_link = InlineKeyboardButton(text='Наш сайт', url='https://google.com')
+        url_kb.add(url_help, url_link)
+        await message.answer(
+            'Если возникли какие-либо трудности или вопросы, пожалуйста, ознакомьтесь со списком ниже',
+            reply_markup=url_kb)
+
+
+# =============================================================================
+# --------------------------- НАВИГАЦИЯ ---------------------------------------
+# --------------------- ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ --------------------------------
 @dp.message_handler(lambda message: message.text == 'Заполнить контактную информацию')
 async def get_contact_info(message: types.Message):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -338,25 +360,6 @@ async def contact_handler(message: types.Message):
     await message.answer(f"Успешно! ✅", reply_markup=keyboard)
 
 
-@dp.message_handler(commands=['help'])
-async def help_user(message: types.Message):
-    # =========== ПРОВЕРКА ДОПУСКА ПОЛЬЗОВАТЕЛЯ ================
-    if await check_ban_users(message.from_user.id) is not True:
-        tracer_l.tracer_charge(
-            'INFO', message.from_user.id, help_user.__name__, "user in help")
-
-        url_kb = InlineKeyboardMarkup(row_width=2)
-        url_help = InlineKeyboardButton(text='Поддержка', url='https://google.com')
-        url_link = InlineKeyboardButton(text='Наш сайт', url='https://google.com')
-        url_kb.add(url_help, url_link)
-        await message.answer(
-            'Если возникли какие-либо трудности или вопросы, пожалуйста, ознакомьтесь со списком ниже',
-            reply_markup=url_kb)
-
-
-# =============================================================================
-# --------------------------- НАВИГАЦИЯ ---------------------------------------
-# --------------------- ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ --------------------------------
 @dp.message_handler(commands=['status'])
 @dp.message_handler(lambda message: message.text == 'Узнать статус изделия')
 async def product_status(message: types.Message):
@@ -430,8 +433,83 @@ async def product_status(message: types.Message):
             'INFO', message.from_user.id, product_status.__name__, f"product status: {_status_product}")
 
 
-def format_number(num):
-    return '{0:,}'.format(num).replace(",", " ")
+# -------- ФОРМА ЗАПИСИ НА ЗАНЯТИЕ --------
+@dp.message_handler(lambda message: message.text == 'Записаться на занятие')
+@dp.message_handler(commands=['registration'])
+async def cmd_start(message: types.Message):
+
+    manager_customer_reg = ManagerCustomerReg()
+    btn_days_for_register = manager_customer_reg.formatting_buttons_for_display()
+
+    await message.answer("Выберите дату:", reply_markup=btn_days_for_register)
+    await FormRegistrationForLesson.date.set()
+
+
+@dp.message_handler(state=FormRegistrationForLesson.date)
+async def process_date(message: types.Message, state: FSMContext):
+    await state.update_data(date=message.text)
+
+    time_buttons = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    # TODO: написать логику извлечения этих данных из БД
+    time_buttons.add(InlineKeyboardButton("11:00"))
+    time_buttons.add(InlineKeyboardButton("13:00"))
+    time_buttons.add(InlineKeyboardButton("15:00"))
+
+    await message.answer("Выберите время:", reply_markup=time_buttons)
+    await FormRegistrationForLesson.time.set()
+
+
+@dp.message_handler(state=FormRegistrationForLesson.time)
+async def process_time(message: types.Message, state: FSMContext):
+    await state.update_data(time=message.text)
+
+    activity_buttons = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    # TODO: написать логику извлечения этих данных из БД
+    activity_buttons.add(InlineKeyboardButton("Лепка"))
+    activity_buttons.add(InlineKeyboardButton("Живопись"))
+
+    await message.answer("Выберите тип занятия:", reply_markup=activity_buttons)
+    await FormRegistrationForLesson.activity.set()
+
+
+@dp.message_handler(state=FormRegistrationForLesson.activity)
+async def process_comments(message: types.Message, state: FSMContext):
+    await state.update_data(activity=message.text)
+
+    user_data = await state.get_data()
+    await message.answer(
+        f"<b>Вы записаны {CONFIRM_SYMBOL}</b>\n\n"
+        f"Дата: {user_data['date']}\n"
+        f"Время: {user_data['time']}\n"
+        f"Тип занятия: {user_data['activity']}", parse_mode='HTML', reply_markup=None)
+    # TODO: написать логику сохранения этих данных в БД
+
+    await state.finish()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('registration:'))
+async def process_product_confirm(callback_query: types.CallbackQuery):
+    """
+        Функция при подтверждении изделия пользователем
+        :param callback_query: default handler
+        :return: message to user and admin
+    """
+    user_id = int(callback_query.data.split(':')[1])
+
+    try:
+        product_manager = ProductManager(INSPIRA_DB)
+        user_group = product_manager.get_group(user_id)
+        tracer_l.tracer_charge(
+            'INFO', callback_query.from_user.id, process_product_confirm.__name__,
+            f"")
+    except Exception as critical:
+        tracer_l.tracer_charge(
+            'CRITICAL', callback_query.from_user.id, process_product_confirm.__name__,
+            f"", critical)
+        return
+
+    await administrators.sending_messages_to_admins(
+        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} записался на занятие ✅")
 
 
 # ==========================================================================
@@ -439,7 +517,7 @@ def format_number(num):
 last_admin_message_id, last_admin_menu_message_id = {}, {}
 
 
-# МЕХАНИЗМ УДАЛЕНИЯ СООБЩЕНИЯ (ИМИТАЦИЯ МЕНЮ для АДМИНА)
+# ----- МЕХАНИЗМ УДАЛЕНИЯ СООБЩЕНИЯ (ИМИТАЦИЯ МЕНЮ для АДМИНА)
 async def construction_to_delete_messages(message):
     try:
         if last_admin_message_id.get(message.from_user.id):
@@ -488,12 +566,6 @@ async def admin_panel(message: types.Message):
             'ADMIN', message.from_user.id, admin_panel.__name__, "admin in control panel")
     else:
         print('Enemy')
-
-
-class FormGroupProduct(StatesGroup):
-    group = State()
-    product_id = State()
-    user_id = 0
 
 
 # @dp.message_handler(lambda message: "add_to_group" in message.text)
@@ -620,7 +692,6 @@ async def bring_the_product_to_work(callback_query: types.CallbackQuery):
         tracer_l.tracer_charge(
             'WARNING', callback_query.from_user.id, bring_the_product_to_work.__name__,
             f"user try to check this function")
-        await drop_admin_message(callback_query.message, _sent_message)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('set_status_ready:'))
@@ -978,10 +1049,6 @@ async def monitor_process(message: types.Message):
             await message.answer("Ошибка импортирования модуля", e)
 
 
-class FormAddAdmin(StatesGroup):
-    admin_user_id = State()
-
-
 @dp.message_handler(commands=['add_admin'])
 async def cmd_add_admin(message: types.Message):
     if message.from_user.id == superuser_id:
@@ -1259,6 +1326,17 @@ async def sent_message_to_user(message: types.Message):
             reply_markup=keyboard)
 
 
+async def send_statistics():
+    while True:
+        now = datetime.datetime.now()
+        if now.hour == 12 and now.minute == 0:
+            for admin_id in administrators.get_list_of_admins():
+                await bot.send_message(admin_id, "Статистика за день: ...")
+            await asyncio.sleep(60)
+        await asyncio.sleep(30)
+
+
+# ------------- АДМИНИСТРИРОВАНИЕ СЕРВЕРНОЙ ЧАСТИ -----------
 @dp.message_handler(commands=['reboot'])
 async def reboot_server(message: types.Message):
     if message.from_user.id == superuser_id:
@@ -1310,19 +1388,19 @@ if __name__ == '__main__':
         dp.register_message_handler(admin_panel, commands=["inspira"])
         executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
 
-    except aiogram.utils.exceptions.TelegramAPIError as aiogram_critical_error:
-        print("\n\n\n* !!! CRITICAL !!! * --- aiogram ---", aiogram_critical_error, "\n\n\n")
-        tracer_l.tracer_charge(
-            "CRITICAL", 0, "aiogram.utils.exceptions.TelegramAPIError",
-            f"emergency reboot the server", "", f"{aiogram_critical_error}")
-        ServerManager().emergency_reboot()
-
-    except aiohttp.client_exceptions.ServerDisconnectedError as aiohttp_critical_error:
-        print("\n\n\n* !!! CRITICAL !!! * --- aiohttp ---", aiohttp_critical_error, "\n\n\n")
-        tracer_l.tracer_charge(
-            "CRITICAL", 0, "aiohttp.client_exceptions.ServerDisconnectedError",
-            f"emergency reboot the server", f"{aiohttp_critical_error}")
-        ServerManager().emergency_reboot()
+    # except utils.exceptions.TelegramAPIError as aiogram_critical_error:
+    #     print("\n\n\n* !!! CRITICAL !!! * --- aiogram ---", aiogram_critical_error, "\n\n\n")
+    #     tracer_l.tracer_charge(
+    #         "CRITICAL", 0, "aiogram.utils.exceptions.TelegramAPIError",
+    #         f"emergency reboot the server", "", f"{aiogram_critical_error}")
+    #     ServerManager().emergency_reboot()
+    #
+    # except aiohttp.client_exceptions.ServerDisconnectedError as aiohttp_critical_error:
+    #     print("\n\n\n* !!! CRITICAL !!! * --- aiohttp ---", aiohttp_critical_error, "\n\n\n")
+    #     tracer_l.tracer_charge(
+    #         "CRITICAL", 0, "aiohttp.client_exceptions.ServerDisconnectedError",
+    #         f"emergency reboot the server", f"{aiohttp_critical_error}")
+    #     ServerManager().emergency_reboot()
 
     except Exception as critical:
         tracer_l.tracer_charge(

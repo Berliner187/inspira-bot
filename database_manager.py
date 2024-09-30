@@ -28,6 +28,7 @@ PRODUCTS_TABLE_NAME = 'products'
 REFERRALS_TABLE_NAME = 'referrals'
 LIMITED_USERS_TABLE_NAME = 'limited_users'
 ADMINS_TABLE_NAME = 'admins'
+APPOINTMENTS_TABLE_NAME = 'appointments'
 
 
 FIELDS_FOR_USERS = [
@@ -64,6 +65,14 @@ FIELDS_FOR_ADMINS = [
     {'name': 'user_id', 'type': 'INTEGER'},
     {'name': 'security_clearance', 'type': 'INTEGER'},
     {'name': 'admin_status', 'type': 'BOOL'}
+]
+FIELDS_FOR_APPOINTMENTS = [
+    {'name': 'appointment_id', 'type': 'INTEGER PRIMARY KEY'},
+    {'name': 'user_id', 'type': 'INTEGER'},
+    {'name': 'service_name', 'type': 'TEXT'},
+    {'name': 'status', 'type': 'BOOL'},
+    {'name': 'date_lesson', 'type': 'TEXT'},
+    {'name': 'date_update', 'type': 'TEXT'}
 ]
 
 
@@ -854,4 +863,74 @@ class AdminsManager(DataBaseManager):
 
 
 class StatControl(DataBaseManager):
+    """
+        Осуществляет общее управление и отображение данных о текущих заказах и гостях.
+    """
     pass
+
+
+class Schedule(DataBaseManager):
+    @staticmethod
+    def _get_datetime_now():
+        return datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+    def set_available_services(self):
+        pass
+
+    def get_available_services(self):
+        pass
+
+
+class AppointmentManager(Schedule):
+    """
+        Менеджер записей гостей на занятия
+    """
+    def signup_guest_for_lesson(self, user_id: int, service_name: str, date_lesson: str) -> None:
+        """
+            Добавление нового гостя на занятие
+            :param date_lesson: date provide lesson
+            :param user_id: int
+            :param service_name: str
+            :return: None
+        """
+        now = datetime.datetime.now()
+        datetime_now = now.strftime("%d-%m-%Y %H:%M:%S")
+
+        sign_up_data_to_db = {
+            "user_id": user_id,
+            "service_name": service_name,
+            "status": False,
+            "date_lesson": date_lesson,
+            "date_update": datetime_now
+        }
+
+        self.add_record(APPOINTMENTS_TABLE_NAME, sign_up_data_to_db)
+
+    def _update_data(self, new_status, service_name, user_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = f'UPDATE {APPOINTMENTS_TABLE_NAME} SET status = ?, service_name = ?, date_update = ? WHERE user_id = ?'
+        cursor.execute(query, (new_status, service_name, self._get_datetime_now(), user_id))
+        conn.commit()
+        conn.close()
+
+    def confirm_signup(self, user_id: int, service_name: str, new_status: str):
+        """
+            Подтверждение, что гость придет
+            :param user_id:
+            :param service_name:
+            :param new_status:
+            :return: None
+        """
+        self._update_data(new_status, service_name, user_id)
+        print(f"User {user_id} signup status updated to '{new_status}' at {self._get_datetime_now()}")
+
+    def remove_from_lesson(self, user_id: int):
+        """
+            Снять гостя с занятия
+            :param user_id:
+            :return:
+        """
+        self._update_data(None, None, user_id)
+        print(f"User {user_id} has been removed from class at {self._get_datetime_now()}")
