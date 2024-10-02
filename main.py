@@ -19,12 +19,6 @@ from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-from PIL import Image, ImageDraw, ImageFont
-import io
-
-import sqlite3
-import aiosqlite
-
 
 from server_info import timing_decorator
 from database_manager import *
@@ -32,9 +26,10 @@ from forms import *
 
 from tracer import TracerManager, TRACER_FILE
 from customer_registrations import ManagerCustomerReg
+from painting import process_image
 
 
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 DEBUG = True
 
 
@@ -477,11 +472,27 @@ async def process_comments(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
 
     user_data = await state.get_data()
-    await message.answer(
-        f"<b>Вы записаны {CONFIRM_SYMBOL}</b>\n\n"
-        f"Дата: {user_data['date']}\n"
-        f"Время: {user_data['time']}\n"
-        f"Тип занятия: {user_data['activity']}", parse_mode='HTML', reply_markup=None)
+    user_data['date'] = ManagerCustomerReg.formatting_date_reg(user_data['date'])
+
+    output_file = await process_image(user_data, user_data['activity'])
+
+    kb = [
+        [
+            types.KeyboardButton(text="Узнать статус изделия"),
+        ],
+        [
+            types.KeyboardButton(text="Пусто"),
+            types.KeyboardButton(text="Пусто"),
+        ]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    await bot.send_photo(
+        message.from_user.id,
+        photo=InputFile(output_file["output_file"], filename=output_file["output_filename"]),
+        parse_mode='HTML',
+        reply_markup=keyboard,
+        caption=f'<b>Вы записаны {CONFIRM_SYMBOL}</b>')
+
     # TODO: написать логику сохранения этих данных в БД
 
     await state.finish()

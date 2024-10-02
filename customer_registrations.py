@@ -33,3 +33,11 @@ class ManagerCustomerReg:
             date_buttons.row(*row_buttons)
 
         return date_buttons
+
+    @staticmethod
+    def formatting_date_reg(date_str: str):
+
+        day = date_str.split(" ")[0]
+        month = date_str.split(" ")[1].upper()[:3]
+
+        return {"day": day, "month": month}
