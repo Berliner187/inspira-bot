@@ -880,12 +880,34 @@ class Schedule(DataBaseManager):
     def get_available_services(self):
         pass
 
+    def set_available_times(self):
+        pass
+
+    def get_available_times(self):
+        pass
+
 
 class AppointmentManager(Schedule):
     """
         Менеджер записей гостей на занятия
     """
-    def signup_guest_for_lesson(self, user_id: int, service_name: str, date_lesson: str) -> None:
+    def _check_signup_guest_for_lesson(self, user_id: int):
+        """
+            Проверка на запись гостя. Если записан – не дублировать.
+        """
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = f'SELECT date_update FROM {APPOINTMENTS_TABLE_NAME} WHERE user_id = ?'
+        selected_lesson = cursor.execute(query, (user_id, )).fetchone()
+        conn.close()
+
+        if selected_lesson:
+            return True     # Если гость записан
+        else:
+            return False     # Если гость НЕ записан
+
+    def signup_guest_for_lesson(self, user_id: int, service_name: str, date_lesson: str) -> bool:
         """
             Добавление нового гостя на занятие
             :param date_lesson: date provide lesson
@@ -904,7 +926,12 @@ class AppointmentManager(Schedule):
             "date_update": datetime_now
         }
 
-        self.add_record(APPOINTMENTS_TABLE_NAME, sign_up_data_to_db)
+        if self._check_signup_guest_for_lesson(user_id):
+            self._update_data(False, service_name, user_id)
+            return True
+        else:
+            self.add_record(APPOINTMENTS_TABLE_NAME, sign_up_data_to_db)
+            return False
 
     def _update_data(self, new_status, service_name, user_id):
         conn = sqlite3.connect(self.db_name)
@@ -934,3 +961,31 @@ class AppointmentManager(Schedule):
         """
         self._update_data(None, None, user_id)
         print(f"User {user_id} has been removed from class at {self._get_datetime_now()}")
+
+    def get_upcoming_lessons(self):
+        """
+            Выгрузка всех предстоящих занятий от текущей даты до 3-х недель вперед
+        :return:
+        """
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        # Получение текущей даты и даты через 3 недели
+        current_date = datetime.datetime.now()
+        end_date = current_date + datetime.timedelta(weeks=3)
+
+        current_date_str = current_date.strftime('%d-%m-%Y')
+        end_date_str = end_date.strftime('%d-%m-%Y')
+
+        query = f'''
+            SELECT * FROM {APPOINTMENTS_TABLE_NAME}
+            WHERE date_lesson >= ? AND date_lesson <= ?
+        '''
+        selected_lessons = cursor.execute(query, (current_date_str, end_date_str)).fetchall()
+
+        for i in selected_lessons:
+            print(i)
+
+        conn.close()
+
+        return selected_lessons

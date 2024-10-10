@@ -35,9 +35,29 @@ class ManagerCustomerReg:
         return date_buttons
 
     @staticmethod
-    def formatting_date_reg(date_str: str):
-
+    def formatting_date_reg(date_str: str) -> dict:
+        """
+            Форматирование даты для отображения в шаблоне.
+            ex. {day: 26, month: СЕН}
+            :param date_str: str, ex. 26 сентября
+            :return: dict, {day: 26, month: СЕН}
+        """
         day = date_str.split(" ")[0]
         month = date_str.split(" ")[1].upper()[:3]
 
         return {"day": day, "month": month}
+
+    @staticmethod
+    def formatting_date_reg_for_database(date_str: str) -> str:
+        """
+            Форматирование даты для сохранения в БД.
+            ex. 26.09.2024
+            :param date_str: str, ex. 26 сентября
+            :return: str, ex. 26.09.2024
+        """
+        date_format = "%d %B"
+        date_obj = datetime.datetime.strptime(date_str, date_format)
+
+        formatted_date = date_obj.strftime(f"%d.%m.{datetime.datetime.now().strftime('%Y')}")
+
+        return formatted_date

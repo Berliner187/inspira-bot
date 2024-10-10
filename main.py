@@ -55,6 +55,7 @@ db_manager.create_table(PRODUCTS_TABLE_NAME, FIELDS_FOR_PRODUCTS)
 db_manager.create_table(REFERRALS_TABLE_NAME, FIELDS_FOR_REFERRALS)
 db_manager.create_table(LIMITED_USERS_TABLE_NAME, FIELDS_FOR_LIMITED_USERS)
 db_manager.create_table(ADMINS_TABLE_NAME, FIELDS_FOR_ADMINS)
+db_manager.create_table(APPOINTMENTS_TABLE_NAME, FIELDS_FOR_APPOINTMENTS)
 
 # ============== ИНИЦИАЛИЗАЦИЯ ЛОГИРОВАНИЯ ==========================
 tracer_l = TracerManager(TRACER_FILE)
@@ -75,15 +76,16 @@ notify_banned_users = []
 
 # ===========================
 # --- ШАБЛОННЫЕ СООБЩЕНИЯ ---
+CONFIRM_SYMBOL = "✅"
+WARNING_SYMBOL = "⚠️"
 ADMIN_PREFIX_TEXT = '⚠ CONTROL PANEL ⚠\n'
 USER_PREFIX_TEXT = '<b>Уважаемый гость!</b>\n'
 PRODUCT_STATUSES = {
-    "RECEIVED": "Получено ✅",
+    "RECEIVED": f"Получено {CONFIRM_SYMBOL}",
     "DONE": "Ожидает получения 🟡",
     "WORK": "В работе ⌛",
     "WAIT": "Ожидается ввод"
 }
-CONFIRM_SYMBOL = "✅"
 
 
 # Security
@@ -352,7 +354,7 @@ async def contact_handler(message: types.Message):
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-    await message.answer(f"Успешно! ✅", reply_markup=keyboard)
+    await message.answer(f"Успешно! {CONFIRM_SYMBOL}", reply_markup=keyboard)
 
 
 @dp.message_handler(commands=['status'])
@@ -400,7 +402,7 @@ async def product_status(message: types.Message):
                 callback_data=f"product_has_been_received:{message.from_user.id}")
             markup.add(ready_button)
             await bot.send_message(
-                message.from_user.id, '<b>ГОТОВО ✅</b>\n\nМожете забрать свое творение!', reply_markup=markup,
+                message.from_user.id, f'<b>ГОТОВО {CONFIRM_SYMBOL}</b>\n\nМожете забрать свое творение!', reply_markup=markup,
                 parse_mode='HTML'
             )
 
@@ -445,6 +447,7 @@ async def process_date(message: types.Message, state: FSMContext):
     await state.update_data(date=message.text)
 
     time_buttons = types.ReplyKeyboardMarkup(resize_keyboard=True)
+
     # TODO: написать логику извлечения этих данных из БД
     time_buttons.add(InlineKeyboardButton("11:00"))
     time_buttons.add(InlineKeyboardButton("13:00"))
@@ -472,8 +475,11 @@ async def process_comments(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
 
     user_data = await state.get_data()
-    user_data['date'] = ManagerCustomerReg.formatting_date_reg(user_data['date'])
+    date_format_for_display = ManagerCustomerReg.formatting_date_reg(user_data['date'])
+    date_format_for_database = ManagerCustomerReg.formatting_date_reg_for_database(user_data['date'])
 
+    user_data_process_image = user_data
+    user_data_process_image['date'] = date_format_for_display
     output_file = await process_image(user_data, user_data['activity'])
 
     kb = [
@@ -486,14 +492,33 @@ async def process_comments(message: types.Message, state: FSMContext):
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-    await bot.send_photo(
-        message.from_user.id,
-        photo=InputFile(output_file["output_file"], filename=output_file["output_filename"]),
-        parse_mode='HTML',
-        reply_markup=keyboard,
-        caption=f'<b>Вы записаны {CONFIRM_SYMBOL}</b>')
 
-    # TODO: написать логику сохранения этих данных в БД
+    try:
+        appointment_manager = AppointmentManager(INSPIRA_DB)
+
+        id_user = message.from_user.id
+        date_lesson = date_format_for_database
+        service_name = user_data['activity']
+
+        # Проверка записи на занятие
+        appointment_record = appointment_manager.signup_guest_for_lesson(id_user, service_name, date_lesson)
+
+        if appointment_record:
+            await bot.send_message(
+                message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпеньем :)", parse_mode='HTML')
+        else:
+            await bot.send_photo(
+                message.from_user.id,
+                photo=InputFile(output_file["output_file"], filename=output_file["output_filename"]),
+                parse_mode='HTML',
+                reply_markup=keyboard,
+                caption=f'<b>Вы записаны {CONFIRM_SYMBOL}</b>')
+
+    except Exception as fatal:
+        await message.reply("Не удалось записаться :(\n\nПожалуйста, повторите попытку позже")
+        tracer_l.tracer_charge(
+            'CRITICAL', message.from_user.id, process_comments.__name__,
+            f"critical error", fatal)
 
     await state.finish()
 
@@ -520,7 +545,7 @@ async def process_product_confirm(callback_query: types.CallbackQuery):
         return
 
     await administrators.sending_messages_to_admins(
-        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} записался на занятие ✅")
+        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} записался на занятие {CONFIRM_SYMBOL}")
 
 
 # ==========================================================================
@@ -636,9 +661,9 @@ async def process_product_number(message: types.Message, state: FSMContext):
 
     guest_product_card_text += '<i>Телефон '
     if check_phone:
-        guest_product_card_text += 'подтверждён ✅'
+        guest_product_card_text += f'подтверждён {CONFIRM_SYMBOL}'
     else:
-        guest_product_card_text += 'не подтверждён ⚠️'
+        guest_product_card_text += f'не подтверждён {WARNING_SYMBOL}'
     guest_product_card_text += '</i>'
 
     try:
@@ -683,14 +708,13 @@ async def bring_the_product_to_work(callback_query: types.CallbackQuery):
                 await bot.send_message(
                     user_id,
                     f"{USER_PREFIX_TEXT}"
-                    f"Ваше изделие принято в работу!\n\n"
-                    f"<i>Вам придёт уведомление о готовности</i>",
+                    f"Ваше изделие принято в работу!\n\n<i>Вам придёт уведомление о готовности</i>",
                     parse_mode='HTML'
                 )
-            except Exception as e:
+            except Exception as fail:
                 tracer_l.tracer_charge(
                     'ERROR', callback_query.from_user.id, bring_the_product_to_work.__name__,
-                    f"error while trying send message to {user_id}")
+                    f"error while trying send message to {user_id}", fail)
 
             tracer_l.tracer_charge(
                 'ADMIN', callback_query.from_user.id, bring_the_product_to_work.__name__,
@@ -717,7 +741,7 @@ async def process_set_status_ready(callback_query: types.CallbackQuery):
     markup.add(ready_button)
 
     if status_update_product_status:
-        message_for_admin = f'{ADMIN_PREFIX_TEXT}<b>ГОТОВО</b>\n\n<i>Статус изделия для {user_id}: ГОТОВ</i>'
+        message_for_admin = f'{ADMIN_PREFIX_TEXT}<b>ГОТОВО {CONFIRM_SYMBOL}</b>\n\n<i>Изделие гостя {user_id} приведено в статус готовности</i>'
         await bot.send_message(
             user_id,
             f"{USER_PREFIX_TEXT}"
@@ -762,7 +786,7 @@ async def process_product_confirm(callback_query: types.CallbackQuery):
         return
 
     await administrators.sending_messages_to_admins(
-        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} подтвердил получение ✅")
+        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} подтвердил получение {CONFIRM_SYMBOL}")
 
     if status_update_product_status:
         message_for_user = (f'<b>Расскажите о своих впечатлениях!</b>\n\n'
@@ -896,7 +920,8 @@ async def user_card(callback_query: types.CallbackQuery):
         user_phone = users_manager.get_phone(selected_user_id)
         get_user_contact_info = users_manager.get_user_contact_info(selected_user_id)
 
-        status_confirmed_user = "✅" if user_phone is not None else "⚠️"
+        # Префикс текстового сообщения о статусе гостя
+        status_confirmed_user = CONFIRM_SYMBOL if user_phone is not None else WARNING_SYMBOL
 
         markup = InlineKeyboardMarkup()
 
@@ -982,7 +1007,7 @@ async def show_logs(message: types.Message):
             if prev_log_entry:
                 prev_log_time = datetime.datetime.strptime(prev_log_entry[FIELDS_LOG[1]], "%H:%M:%S-%d.%m.%Y")
                 time_diff = round((log_time - prev_log_time).total_seconds())
-                log_text += f"      ⚠️  {time_diff} sec"
+                log_text += f"      {WARNING_SYMBOL}  {time_diff} sec"
             return log_text
 
         if len(logs) <= max_logs_to_show:
@@ -1043,6 +1068,19 @@ async def show_all_users(message: types.Message):
         await wait_message.delete()
         sent_message = await message.answer(users_from_db, parse_mode="HTML")
         await drop_admin_message(message, sent_message)
+
+
+@dp.message_handler(lambda message: message.text == '/LESSONS/')
+async def show_all_users(message: types.Message):
+    if message.from_user.id in administrators.get_list_of_admins():
+        appointments = AppointmentManager(INSPIRA_DB)
+        appointment_tuple = appointments.get_upcoming_lessons()
+
+        appointment_str = ''
+        for appointment in appointment_tuple:
+            appointment_str += f"{appointment[1]}\n"
+
+        await bot.send_message(message.from_user.id, appointment_str)
 
 
 @dp.message_handler(lambda message: message.text == '/PC/')
@@ -1261,7 +1299,6 @@ async def send_html_message(message: types.Message):
                 _message = ' '.join(message.text.split()[2:])
             else:
                 _message = message.text.split()[2]
-
             _message = _message.replace("\\n", "\n")
 
             try:
@@ -1337,13 +1374,25 @@ async def sent_message_to_user(message: types.Message):
             reply_markup=keyboard)
 
 
-async def send_statistics():
+async def general_coroutine():
+    print("\nSTART the COROUTINE: [ OK ]\n")
     while True:
         now = datetime.datetime.now()
+
         if now.hour == 12 and now.minute == 0:
             for admin_id in administrators.get_list_of_admins():
                 await bot.send_message(admin_id, "Статистика за день: ...")
             await asyncio.sleep(60)
+        if now.hour == 10 and now.minute == 0:
+            # TODO: Отправка сведений ближайших X занятиях
+            pass
+        if now.hour == 11 and now.minute == 0:
+            # TODO: Запрос подтверждения прихода на занятие от пользователей (в день занятия)
+            pass
+        if now.hour == 17 and now.minute == 2:
+            for admin_id in administrators.get_list_of_admins():
+                await bot.send_message(admin_id, "Test: test ...")
+
         await asyncio.sleep(30)
 
 
@@ -1375,9 +1424,7 @@ class ServerManager:
 
 
 # ==========================================================================
-# --------------------- СЕРВЕРНАЯ ЧАСТЬ -----------------------
-
-
+# ------------------------ ТАБЛО СЕРВЕРНОЙ ЧАСТИ ---------------------------
 async def on_startup(dp):
     os.system('clear')
     print('==================== BOT INSPIRA START ========================')
@@ -1390,6 +1437,7 @@ async def on_startup(dp):
     )
     print(f'===== DEBUG: {DEBUG} =============================================')
     print(f'===== INSPIRA: {__version__}  =======================================')
+    # await general_coroutine()
     tracer_l.tracer_charge(
         "SYSTEM", 0, on_startup.__name__, "start the server")
 
