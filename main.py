@@ -29,7 +29,7 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.4.1'
+__version__ = '0.5.1'
 DEBUG = True
 
 
@@ -38,7 +38,6 @@ try:
         _config = json.load(config_file)
     exhibit = str(_config["telegram_token"])
     superuser_id = _config["superuser_id"]
-    PAYMENTS_TOKEN = _config["payment_token"]
 except Exception as e:
     exhibit = None
     print("ОШИБКА при ЧТЕНИИ токена ТЕЛЕГРАМ", e)
@@ -357,6 +356,27 @@ async def contact_handler(message: types.Message):
     await message.answer(f"Успешно! {CONFIRM_SYMBOL}", reply_markup=keyboard)
 
 
+async def check_auth_user(user_id: int):
+    kb = [
+        [
+            types.KeyboardButton(text="Заполнить контактную информацию"),
+        ],
+        [
+            types.KeyboardButton(text="Больше"),
+            types.KeyboardButton(text="Помощь")
+        ]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+    await bot.send_message(user_id,
+                           "<b>Упс..</b>\n"
+                           "Вы не авторизованы\n\n"
+                           "<i>Подтвердите свой аккаунт, отправив номер телефона</i>",
+                           reply_markup=keyboard, parse_mode='HTML')
+    tracer_l.tracer_charge(
+        'INFO', user_id, product_status.__name__, "user: not logged in")
+
+
 @dp.message_handler(commands=['status'])
 @dp.message_handler(lambda message: message.text == 'Узнать статус изделия')
 async def product_status(message: types.Message):
@@ -366,24 +386,7 @@ async def product_status(message: types.Message):
     check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
     if check_phone is False:
-        kb = [
-            [
-                types.KeyboardButton(text="Заполнить контактную информацию"),
-            ],
-            [
-                types.KeyboardButton(text="Больше"),
-                types.KeyboardButton(text="Помощь")
-            ]
-        ]
-        keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-        await bot.send_message(message.from_user.id,
-                               "<b>Упс..</b>\n"
-                               "Вы не авторизованы\n\n"
-                               "<i>Подтвердите свой аккаунт, отправив номер телефона</i>",
-                               reply_markup=keyboard, parse_mode='HTML')
-        tracer_l.tracer_charge(
-            'INFO', message.from_user.id, product_status.__name__, "user: not logged in")
+        await check_auth_user(message.from_user.id)
     else:
         _db_manager = ProductManager(INSPIRA_DB)
         _status_product = _db_manager.get_product_status(message.from_user.id)
@@ -434,12 +437,16 @@ async def product_status(message: types.Message):
 @dp.message_handler(lambda message: message.text == 'Записаться на занятие')
 @dp.message_handler(commands=['registration'])
 async def cmd_start(message: types.Message):
+    check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
-    manager_customer_reg = ManagerCustomerReg()
-    btn_days_for_register = manager_customer_reg.formatting_buttons_for_display()
+    if check_phone is False:
+        await check_auth_user(message.from_user.id)
+    else:
+        manager_customer_reg = ManagerCustomerReg()
+        btn_days_for_register = manager_customer_reg.formatting_buttons_for_display()
 
-    await message.answer("Выберите дату:", reply_markup=btn_days_for_register)
-    await FormRegistrationForLesson.date.set()
+        await message.answer("Выберите дату:", reply_markup=btn_days_for_register)
+        await FormRegistrationForLesson.date.set()
 
 
 @dp.message_handler(state=FormRegistrationForLesson.date)
@@ -498,14 +505,21 @@ async def process_comments(message: types.Message, state: FSMContext):
 
         id_user = message.from_user.id
         date_lesson = date_format_for_database
+        time_lesson = user_data['time']
         service_name = user_data['activity']
 
         # Проверка записи на занятие
-        appointment_record = appointment_manager.signup_guest_for_lesson(id_user, service_name, date_lesson)
+        appointment_record = appointment_manager.signup_guest_for_lesson(
+            id_user, service_name, date_lesson, time_lesson)
 
-        if appointment_record:
+        if appointment_record is False:
             await bot.send_message(
                 message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпеньем :)", parse_mode='HTML')
+        elif appointment_record is None:
+            await bot.send_message(
+                message.from_user.id,
+                "<b>К сожалению, все места заняты</b>\n\nПопробуйте выбрать другую дату и время :(",
+                parse_mode='HTML')
         else:
             await bot.send_photo(
                 message.from_user.id,
@@ -988,48 +1002,6 @@ async def show_all_commands(message: types.Message):
         await drop_admin_message(message, _sent_message)
 
 
-@dp.message_handler(lambda message: message.text == '/LOGS/')
-async def show_logs(message: types.Message):
-    if message.from_user.id in administrators.get_list_of_admins():
-        wait_message = await message.answer("[~LOADING~]")
-        await construction_to_delete_messages(message)
-
-        logs = await read_logs()
-        max_logs_to_show = 20
-
-        def format_log_entry(log_entry, prev_log_entry=None):
-            log_time = datetime.datetime.strptime(log_entry[FIELDS_LOG[1]], "%H:%M:%S-%d.%m.%Y")
-            log_text = (
-                f"Time: {log_entry[FIELDS_LOG[1]]}\n"
-                f"Cause: {log_entry[FIELDS_LOG[3]]}\n"
-                f"Status: {log_entry[FIELDS_LOG[2]]}"
-            )
-            if prev_log_entry:
-                prev_log_time = datetime.datetime.strptime(prev_log_entry[FIELDS_LOG[1]], "%H:%M:%S-%d.%m.%Y")
-                time_diff = round((log_time - prev_log_time).total_seconds())
-                log_text += f"      {WARNING_SYMBOL}  {time_diff} sec"
-            return log_text
-
-        if len(logs) <= max_logs_to_show:
-            logs_text = "\n\n".join([format_log_entry(log) for log in logs])
-        else:
-            last_logs = logs[-max_logs_to_show:]
-            logs_text = "\n\n".join(
-                [format_log_entry(log, prev_log) for log, prev_log in zip(last_logs[1:], last_logs[:-1])])
-        if logs_text:
-            sent_message = await message.answer("// LAST LOGS:\n\n" + logs_text)
-        else:
-            sent_message = await message.answer("// EMPTY //")
-
-        await wait_message.delete()
-        await drop_admin_message(message, sent_message)
-    else:
-        tracer_l.tracer_charge(
-            "WARNING", message.from_user.id, show_logs.__name__,
-            f"somebody try to check logs")
-        await message.answer("$^@!($@&() DB_ERR")
-
-
 @dp.message_handler(lambda message: message.text == '/USERS/')
 async def show_all_users(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
@@ -1070,15 +1042,16 @@ async def show_all_users(message: types.Message):
         await drop_admin_message(message, sent_message)
 
 
+@templates_status_events.event_handler
 @dp.message_handler(lambda message: message.text == '/LESSONS/')
 async def show_all_users(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
         appointments = AppointmentManager(INSPIRA_DB)
-        appointment_tuple = appointments.get_upcoming_lessons()
+        sorted_lessons_dict = appointments.get_upcoming_lessons()
 
         appointment_str = ''
-        for appointment in appointment_tuple:
-            appointment_str += f"{appointment[1]}\n"
+        for date_time, count in sorted_lessons_dict.items():
+            appointment_str += f"{date_time}: {count} пупсов"
 
         await bot.send_message(message.from_user.id, appointment_str)
 
@@ -1133,7 +1106,7 @@ async def process_add_new_admin(message: types.Message, state: FSMContext):
 
             admins_manager.add_new_admin(admin_user_id, security_clearance)
 
-            await message.reply(f"Администратор с user_id {admin_user_id} добавлен.")
+            await message.reply(f"Администратор с user_id {admin_user_id} добавлен {CONFIRM_SYMBOL}")
             await state.finish()
             tracer_l.tracer_charge(
                 "ADMIN", message.from_user.id, process_add_new_admin.__name__,
@@ -1230,41 +1203,6 @@ async def req_in_db(message: types.Message):
                 f"{_user_card}\n\n{text_status_user_in_bot}", parse_mode='HTML')
         else:
             sent_message = await message.answer(f"➜ USER not exist ❌")
-
-        await drop_admin_message(message, sent_message)
-
-
-@dp.message_handler(commands=['l'])
-async def req_in_db(message: types.Message):
-    if message.from_user.id in administrators.get_list_of_admins():
-        await construction_to_delete_messages(message)
-
-        _user_id = int(message.text.split()[1])
-        logs = reversed(await read_logs())
-
-        cnt = 0
-        limit = 20
-        logs_text = []
-        for item in logs:
-            numbers = re.findall(r'\d+', item['status'])
-            if str(_user_id) in numbers:
-                if 'PARSING for ' not in item['status']:
-                    cnt += 1
-                    logs_text.append(item)
-                    if cnt == limit:
-                        break
-        log_mes = f"// LAST LOGS for {_user_id}\n\n"
-        if logs_text:
-            last_logs = reversed(logs_text)
-
-            for i in last_logs:
-                log_mes += f"Date: {i['date']}\n" \
-                           f"Status: {i['status']}\n" \
-                           f"Cause: {i['cause']}"
-                log_mes += '\n\n'
-            sent_message = await message.answer(log_mes)
-        else:
-            sent_message = await message.answer("// EMPTY //")
 
         await drop_admin_message(message, sent_message)
 

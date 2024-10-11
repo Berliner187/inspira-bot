@@ -72,6 +72,7 @@ FIELDS_FOR_APPOINTMENTS = [
     {'name': 'service_name', 'type': 'TEXT'},
     {'name': 'status', 'type': 'BOOL'},
     {'name': 'date_lesson', 'type': 'TEXT'},
+    {'name': 'time_lesson', 'type': 'TEXT'},
     {'name': 'date_update', 'type': 'TEXT'}
 ]
 
@@ -891,6 +892,7 @@ class AppointmentManager(Schedule):
     """
         Менеджер записей гостей на занятия
     """
+    @templates_status_events.event_handler
     def _check_signup_guest_for_lesson(self, user_id: int):
         """
             Проверка на запись гостя. Если записан – не дублировать.
@@ -907,9 +909,62 @@ class AppointmentManager(Schedule):
         else:
             return False     # Если гость НЕ записан
 
-    def signup_guest_for_lesson(self, user_id: int, service_name: str, date_lesson: str) -> bool:
+    @staticmethod
+    def _is_lesson_upcoming(lesson_date_str) -> bool:
+        """
+        Проверяет, актуально ли занятие в зависимости от текущей даты и даты занятия.
+        :param lesson_date_str: Дата занятия в формате 'дд.мм.гггг'
+        :return: True, если занятие актуально (в пределах трех недель), иначе False
+        """
+        # Преобразование строки с датой в объект datetime
+        date_format = '%d.%m.%Y'
+        lesson_date = datetime.datetime.strptime(lesson_date_str, date_format)
+
+        current_date = datetime.datetime.now()
+        three_weeks_later = current_date + datetime.timedelta(weeks=3)
+
+        return current_date <= lesson_date <= three_weeks_later
+
+    def __get_guest_list_for_lessons(self) -> list:
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = f'''
+                    SELECT * FROM {APPOINTMENTS_TABLE_NAME}
+                '''
+        all_lessons = cursor.execute(query).fetchall()
+        cursor.close()
+        conn.close()
+
+        return all_lessons
+
+    def get_quantity_guests_in_lesson(self, date_lesson, time_lesson):
+        all_lessons = self.__get_guest_list_for_lessons()
+
+        count = 0
+
+        for lesson in all_lessons:
+            _date = lesson[4]
+            _time = lesson[5]
+            if _date == date_lesson:
+                if _time == time_lesson:
+                    count += 1
+
+        return count
+
+    def check_quantity_guests_in_lesson(self, date_lesson, time_lesson, limiter=8):
+        quantity_guests = self.get_quantity_guests_in_lesson(date_lesson, time_lesson)
+        print(quantity_guests)
+        if quantity_guests > limiter:
+            return False    # Прекращаем запись
+        else:
+            return True     # Добро
+
+    @templates_status_events.event_handler
+    def signup_guest_for_lesson(self, user_id: int, service_name: str, date_lesson: str, time_lesson: str) -> bool:
         """
             Добавление нового гостя на занятие
+            :param time_lesson:
             :param date_lesson: date provide lesson
             :param user_id: int
             :param service_name: str
@@ -923,17 +978,19 @@ class AppointmentManager(Schedule):
             "service_name": service_name,
             "status": False,
             "date_lesson": date_lesson,
+            "time_lesson": time_lesson,
             "date_update": datetime_now
         }
 
         if self._check_signup_guest_for_lesson(user_id):
-            self._update_data(False, service_name, user_id)
-            return True
-        else:
-            self.add_record(APPOINTMENTS_TABLE_NAME, sign_up_data_to_db)
             return False
+        if self.check_quantity_guests_in_lesson(date_lesson, time_lesson):
+            self.add_record(APPOINTMENTS_TABLE_NAME, sign_up_data_to_db)
+            return True
 
-    def _update_data(self, new_status, service_name, user_id):
+    @templates_status_events.event_handler
+    def _update_status(self, new_status, service_name, user_id):
+        """ Обновление статуса: подтверждение, что гость придет """
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
@@ -942,50 +999,109 @@ class AppointmentManager(Schedule):
         conn.commit()
         conn.close()
 
+    @templates_status_events.event_handler
     def confirm_signup(self, user_id: int, service_name: str, new_status: str):
         """
-            Подтверждение, что гость придет
+            Подтверждение гостем, что тот придет
             :param user_id:
             :param service_name:
             :param new_status:
             :return: None
         """
-        self._update_data(new_status, service_name, user_id)
+        self._update_status(new_status, service_name, user_id)
         print(f"User {user_id} signup status updated to '{new_status}' at {self._get_datetime_now()}")
 
+    @templates_status_events.event_handler
     def remove_from_lesson(self, user_id: int):
         """
             Снять гостя с занятия
             :param user_id:
             :return:
         """
-        self._update_data(None, None, user_id)
+        self._update_status(None, None, user_id)
         print(f"User {user_id} has been removed from class at {self._get_datetime_now()}")
 
+    @staticmethod
+    def _calculate_indicators_upcoming_lessons(lessons: list):
+        lessons_dict = {}
+
+        for entry in lessons:
+            date = entry[4]
+            _time = entry[5]
+            date_time_key = f"{date}, {_time}"
+
+            if date_time_key in lessons_dict:
+                lessons_dict[date_time_key] += 1
+            else:
+                lessons_dict[date_time_key] = 1
+
+        sorted_lessons_dict = dict(sorted(lessons_dict.items(), key=lambda x: (x[0].split(',')[0], x[0].split(',')[1])))
+
+        return sorted_lessons_dict
+
+    @templates_status_events.event_handler
     def get_upcoming_lessons(self):
         """
             Выгрузка всех предстоящих занятий от текущей даты до 3-х недель вперед
-        :return:
+            :return:
         """
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-
         # Получение текущей даты и даты через 3 недели
         current_date = datetime.datetime.now()
         end_date = current_date + datetime.timedelta(weeks=3)
 
-        current_date_str = current_date.strftime('%d-%m-%Y')
-        end_date_str = end_date.strftime('%d-%m-%Y')
+        date_format = '%d.%m.%Y'
+
+        current_date_str = current_date.strftime(date_format)
+        end_date_str = end_date.strftime(date_format)
+        print(f"Текущая дата: {current_date_str}, через 3 недели: {end_date_str}")
+
+        all_lessons = self.__get_guest_list_for_lessons()
+
+        selected_lessons = []
+        for lesson in all_lessons:
+            date_lesson = datetime.datetime.strptime(lesson[4], date_format)
+            if current_date <= date_lesson <= end_date:
+                selected_lessons.append(lesson)
+
+        print("Выбранные занятия:", selected_lessons)
+
+        # Если есть выбранные занятия, передаем их для дальнейшей обработки
+        if selected_lessons:
+            return self._calculate_indicators_upcoming_lessons(selected_lessons)
+        else:
+            print("Нет предстоящих занятий в указанный период.")
+            return None
+
+    @templates_status_events.event_handler
+    def get_lessons_by_time(self):
+        """
+            Выгрузка количества людей на занятия в 11:00, 13:00 и 15:00 по датам
+        :return: Словарь с датами и количеством людей на занятия
+        """
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        times_of_interest = ['11:00', '13:00', '15:00']
+
+        lessons_summary = {}
 
         query = f'''
-            SELECT * FROM {APPOINTMENTS_TABLE_NAME}
-            WHERE date_lesson >= ? AND date_lesson <= ?
+            SELECT lesson_date, time, people_count 
+            FROM {APPOINTMENTS_TABLE_NAME}
+            WHERE time IN ({','.join(['?'] * len(times_of_interest))})
+            ORDER BY lesson_date, time
         '''
-        selected_lessons = cursor.execute(query, (current_date_str, end_date_str)).fetchall()
 
-        for i in selected_lessons:
-            print(i)
+        selected_lessons = cursor.execute(query, times_of_interest).fetchall()
+
+        for lesson in selected_lessons:
+            lesson_date, time, people_count = lesson
+
+            if lesson_date not in lessons_summary:
+                lessons_summary[lesson_date] = {time: people_count}
+            else:
+                lessons_summary[lesson_date][time] = people_count
 
         conn.close()
 
-        return selected_lessons
+        return lessons_summary
