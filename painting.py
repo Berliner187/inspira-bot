@@ -11,6 +11,8 @@ async def process_image(registration_info: dict, service_name: str):
 
     if service_name == "Лепка":
         service_name = "modeling"
+    elif service_name == "Живопись":
+        service_name = "painting"
 
     image_path = f'media/img/inspira-registration-{service_name}.png'
 
