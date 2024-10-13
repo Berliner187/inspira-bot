@@ -635,13 +635,14 @@ class UserManager(DataBaseManager):
         _cursor = _connect.cursor()
 
         query = f'SELECT phone FROM {USERS_TABLE_NAME} WHERE user_id = ?'
-        _cursor.execute(query, (user_id,))
+        find_phone = _cursor.execute(query, (user_id,)).fetchone()[0]
 
-        phone_from_user = self._sql_query_response_to_list(_cursor.fetchone())
-        _cursor.close()
-        _connect.close()
+        if find_phone:
+            phone_from_user = self._sql_query_response_to_list(find_phone)
+            _cursor.close()
+            _connect.close()
 
-        return phone_from_user
+            return phone_from_user
 
     @templates_status_events.event_handler
     def get_user_contact_info(self, user_id: int):
@@ -954,7 +955,6 @@ class AppointmentManager(Schedule):
 
     def check_quantity_guests_in_lesson(self, date_lesson, time_lesson, limiter=8):
         quantity_guests = self.get_quantity_guests_in_lesson(date_lesson, time_lesson)
-        print(quantity_guests)
         if quantity_guests > limiter:
             return False    # Прекращаем запись
         else:
@@ -1010,6 +1010,25 @@ class AppointmentManager(Schedule):
         """
         self._update_status(new_status, service_name, user_id)
         print(f"User {user_id} signup status updated to '{new_status}' at {self._get_datetime_now()}")
+
+    @templates_status_events.event_handler
+    def cancel_signup(self, user_id: int):
+        __connect = sqlite3.connect(self.db_name)
+        __cursor = __connect.cursor()
+
+        query = f'''
+                    SELECT user_id FROM {APPOINTMENTS_TABLE_NAME} WHERE user_id = ?
+                '''
+        find_user = __cursor.execute(query, (user_id, )).fetchone()[0]
+
+        if user_id == find_user:
+            __cursor.execute(f"DELETE FROM {APPOINTMENTS_TABLE_NAME} WHERE user_id = ?", (user_id,))
+            __connect.commit()
+            __connect.commit()
+            __cursor.close()
+            return True
+        else:
+            return False
 
     @templates_status_events.event_handler
     def remove_from_lesson(self, user_id: int):

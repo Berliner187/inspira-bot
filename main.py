@@ -29,7 +29,7 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.5.1'
+__version__ = '0.5.2'
 DEBUG = True
 
 
@@ -77,6 +77,7 @@ notify_banned_users = []
 # --- ШАБЛОННЫЕ СООБЩЕНИЯ ---
 CONFIRM_SYMBOL = "✅"
 WARNING_SYMBOL = "⚠️"
+STOP_SYMBOL = "❌"
 ADMIN_PREFIX_TEXT = '⚠ CONTROL PANEL ⚠\n'
 USER_PREFIX_TEXT = '<b>Уважаемый гость!</b>\n'
 PRODUCT_STATUSES = {
@@ -116,13 +117,36 @@ class ControlAccessConfirmedUsers:
     def check_access_user(user_id: int) -> bool:
         users_manager = UserManager(INSPIRA_DB)
         contact_user = users_manager.get_phone(user_id)
-        if contact_user is not None:
-            return True
-        else:
+        if contact_user is None:
             return False
+        elif contact_user is False:
+            return False
+        else:
+            return True
 
 
 control_access_confirmed_users = ControlAccessConfirmedUsers()
+
+
+async def not_success_auth_user(user_id: int):
+    kb = [
+        [
+            types.KeyboardButton(text="Поделиться контактом"),
+        ],
+        [
+            types.KeyboardButton(text="Больше"),
+            types.KeyboardButton(text="Помощь")
+        ]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+    await bot.send_message(user_id,
+                           "<b>Упс..</b>\n"
+                           "Вы не авторизованы\n\n"
+                           "<i>Подтвердите свой аккаунт, отправив номер телефона</i>",
+                           reply_markup=keyboard, parse_mode='HTML')
+    tracer_l.tracer_charge(
+        'INFO', user_id, product_status.__name__, "user: not logged in")
 
 
 @timing_decorator
@@ -272,7 +296,7 @@ async def start_message(message: types.Message):
                 'INFO', message.from_user.id, '/start', "display admin button")
         else:
             if product_id_by_user is None:
-                kb = [[types.KeyboardButton(text="Заполнить контактную информацию")]]
+                kb = [[types.KeyboardButton(text="Поделиться контактом")]]
                 tracer_l.tracer_charge(
                     'INFO', message.from_user.id, '/start', "user: not logged in")
             else:
@@ -317,7 +341,7 @@ async def help_user(message: types.Message):
 # =============================================================================
 # --------------------------- НАВИГАЦИЯ ---------------------------------------
 # --------------------- ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ --------------------------------
-@dp.message_handler(lambda message: message.text == 'Заполнить контактную информацию')
+@dp.message_handler(lambda message: message.text == 'Поделиться контактом')
 async def get_contact_info(message: types.Message):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     phone_button = types.KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)
@@ -356,27 +380,6 @@ async def contact_handler(message: types.Message):
     await message.answer(f"Успешно! {CONFIRM_SYMBOL}", reply_markup=keyboard)
 
 
-async def check_auth_user(user_id: int):
-    kb = [
-        [
-            types.KeyboardButton(text="Заполнить контактную информацию"),
-        ],
-        [
-            types.KeyboardButton(text="Больше"),
-            types.KeyboardButton(text="Помощь")
-        ]
-    ]
-    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-    await bot.send_message(user_id,
-                           "<b>Упс..</b>\n"
-                           "Вы не авторизованы\n\n"
-                           "<i>Подтвердите свой аккаунт, отправив номер телефона</i>",
-                           reply_markup=keyboard, parse_mode='HTML')
-    tracer_l.tracer_charge(
-        'INFO', user_id, product_status.__name__, "user: not logged in")
-
-
 @dp.message_handler(commands=['status'])
 @dp.message_handler(lambda message: message.text == 'Узнать статус изделия')
 async def product_status(message: types.Message):
@@ -386,7 +389,7 @@ async def product_status(message: types.Message):
     check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
     if check_phone is False:
-        await check_auth_user(message.from_user.id)
+        await not_success_auth_user(message.from_user.id)
     else:
         _db_manager = ProductManager(INSPIRA_DB)
         _status_product = _db_manager.get_product_status(message.from_user.id)
@@ -440,7 +443,7 @@ async def cmd_start(message: types.Message):
     check_phone = control_access_confirmed_users.check_access_user(user_id=message.from_user.id)
 
     if check_phone is False:
-        await check_auth_user(message.from_user.id)
+        await not_success_auth_user(message.from_user.id)
     else:
         manager_customer_reg = ManagerCustomerReg()
         btn_days_for_register = manager_customer_reg.formatting_buttons_for_display()
@@ -513,8 +516,17 @@ async def process_comments(message: types.Message, state: FSMContext):
             id_user, service_name, date_lesson, time_lesson)
 
         if appointment_record is False:
+            markup = InlineKeyboardMarkup()
+
+            ready_button = InlineKeyboardButton(
+                f"Я НЕ ПРИДУ", callback_data=f"cancel_signup:{id_user}")
+
+            markup.add(ready_button)
+
             await bot.send_message(
-                message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпеньем :)", parse_mode='HTML')
+                message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпеньем :)",
+                reply_markup=markup,
+                parse_mode='HTML')
         elif appointment_record is None:
             await bot.send_message(
                 message.from_user.id,
@@ -551,15 +563,36 @@ async def process_product_confirm(callback_query: types.CallbackQuery):
         user_group = product_manager.get_group(user_id)
         tracer_l.tracer_charge(
             'INFO', callback_query.from_user.id, process_product_confirm.__name__,
-            f"")
-    except Exception as critical:
+            f"success product confirm")
+    except Exception as fail:
         tracer_l.tracer_charge(
             'CRITICAL', callback_query.from_user.id, process_product_confirm.__name__,
-            f"", critical)
+            f"", fail)
         return
 
     await administrators.sending_messages_to_admins(
-        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} записался на занятие {CONFIRM_SYMBOL}")
+        f"{ADMIN_PREFIX_TEXT}Гость {user_id} из группы {user_group} подтвердил запись на занятие {CONFIRM_SYMBOL}")
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('cancel_signup:'))
+async def cancel_signup_by_user(callback_query: types.CallbackQuery):
+    """ Отмена занятия гостем """
+    user_id = int(callback_query.data.split(':')[1])
+
+    try:
+        appointment_manager = AppointmentManager(INSPIRA_DB)
+        status_delete = appointment_manager.cancel_signup(user_id)
+
+        if status_delete:
+            await bot.send_message(user_id, f"Запись отменена {STOP_SYMBOL}")
+            tracer_l.tracer_charge(
+                'INFO', callback_query.from_user.id, process_product_confirm.__name__,
+                f"user canceled the lesson")
+    except Exception as fail:
+        await bot.send_message(user_id, f"Ошибочка :(")
+        tracer_l.tracer_charge(
+            'ERROR', callback_query.from_user.id, process_product_confirm.__name__,
+            f"user not be canceled the lesson", fail)
 
 
 # ==========================================================================
@@ -592,7 +625,7 @@ ADMIN_PANEL_BUTTONS = [
         ],
         [
             types.KeyboardButton(text="/USERS/"),
-            types.KeyboardButton(text="/LOGS/"),
+            types.KeyboardButton(text="/LESSONS/"),
             types.KeyboardButton(text="/PC/")
         ]
     ]
