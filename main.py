@@ -29,7 +29,7 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.5.2'
+__version__ = '0.5.3'
 DEBUG = True
 
 
