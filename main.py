@@ -131,11 +131,7 @@ control_access_confirmed_users = ControlAccessConfirmedUsers()
 async def not_success_auth_user(user_id: int):
     kb = [
         [
-            types.KeyboardButton(text="Поделиться контактом"),
-        ],
-        [
-            types.KeyboardButton(text="Больше"),
-            types.KeyboardButton(text="Помощь")
+            types.KeyboardButton(text="Поделиться номером телефона"),
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -296,7 +292,7 @@ async def start_message(message: types.Message):
                 'INFO', message.from_user.id, '/start', "display admin button")
         else:
             if product_id_by_user is None:
-                kb = [[types.KeyboardButton(text="Поделиться контактом")]]
+                kb = [[types.KeyboardButton(text="Поделиться номером телефона")]]
                 tracer_l.tracer_charge(
                     'INFO', message.from_user.id, '/start', "user: not logged in")
             else:
@@ -341,7 +337,7 @@ async def help_user(message: types.Message):
 # =============================================================================
 # --------------------------- НАВИГАЦИЯ ---------------------------------------
 # --------------------- ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ --------------------------------
-@dp.message_handler(lambda message: message.text == 'Поделиться контактом')
+@dp.message_handler(lambda message: message.text == 'Поделиться номером телефона')
 async def get_contact_info(message: types.Message):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     phone_button = types.KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)
@@ -538,7 +534,8 @@ async def process_comments(message: types.Message, state: FSMContext):
                 photo=InputFile(output_file["output_file"], filename=output_file["output_filename"]),
                 parse_mode='HTML',
                 reply_markup=keyboard,
-                caption=f'<b>Вы записаны {CONFIRM_SYMBOL}</b>')
+                caption=f'<b>Ваш билет {CONFIRM_SYMBOL}</b>\n\n'
+                        f'Вы успешно записаны! Бот уведомит о занятие за день до него :)')
 
     except Exception as fatal:
         await message.reply("Не удалось записаться :(\n\nПожалуйста, повторите попытку позже")
@@ -850,7 +847,7 @@ async def process_product_confirm(callback_query: types.CallbackQuery):
                 f"fail while send finally message", f"{error}")
 
 
-GROUPS_PER_PAGE = 10  # Количество групп на странице алмина
+GROUPS_PER_PAGE = 20  # Количество групп на странице алмина
 
 
 @dp.message_handler(lambda message: message.text == '/GROUPS/')
@@ -1075,7 +1072,6 @@ async def show_all_users(message: types.Message):
         await drop_admin_message(message, sent_message)
 
 
-@templates_status_events.event_handler
 @dp.message_handler(lambda message: message.text == '/LESSONS/')
 async def show_all_users(message: types.Message):
     if message.from_user.id in administrators.get_list_of_admins():
@@ -1084,7 +1080,7 @@ async def show_all_users(message: types.Message):
 
         appointment_str = ''
         for date_time, count in sorted_lessons_dict.items():
-            appointment_str += f"{date_time}: {count} пупсов"
+            appointment_str += f"{date_time}: {count} чел.\n"
 
         await bot.send_message(message.from_user.id, appointment_str)
 
