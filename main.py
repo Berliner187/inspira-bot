@@ -29,7 +29,7 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.5.3'
+__version__ = '0.5.4'
 DEBUG = True
 
 
@@ -131,7 +131,7 @@ control_access_confirmed_users = ControlAccessConfirmedUsers()
 async def not_success_auth_user(user_id: int):
     kb = [
         [
-            types.KeyboardButton(text="Поделиться номером телефона"),
+            types.KeyboardButton(text="Отправить номер телефона"),
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -263,7 +263,7 @@ async def start_message(message: types.Message):
             'INFO', message.from_user.id, start_message.__name__, "user launched bot")
 
         wait_message = await message.answer(
-            "<b>➔ INSPIRA</b>\n"
+            "<b>➔ МАСТЕРИ</b>\n"
             "Creative workshop\n\n",
             parse_mode='HTML'
         )
@@ -292,7 +292,7 @@ async def start_message(message: types.Message):
                 'INFO', message.from_user.id, '/start', "display admin button")
         else:
             if product_id_by_user is None:
-                kb = [[types.KeyboardButton(text="Поделиться номером телефона")]]
+                kb = [[types.KeyboardButton(text="Отправить номер телефона")]]
                 tracer_l.tracer_charge(
                     'INFO', message.from_user.id, '/start', "user: not logged in")
             else:
@@ -303,12 +303,15 @@ async def start_message(message: types.Message):
         keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
         try:
-            await bot.send_photo(
-                message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
-                reply_markup=keyboard, parse_mode='HTML',
-                caption=f'<b>INSPIRA – искусство живет здесь.</b>\n\n'
-                        f'Привет! Это Бот Inspira – тут ты можешь записаться на мастер-класс по гончарному делу, '
-                        f'а также узнать о готовности твоего изделия')
+            # await bot.send_photo(
+            #     message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
+            #     reply_markup=keyboard, parse_mode='HTML',
+            #     caption=f'<b>INSPIRA – искусство живет здесь.</b>\n\n'
+            #             f'Привет! Это Бот Inspira – тут ты можешь записаться на мастер-класс по гончарному делу, '
+            #             f'а также узнать о готовности твоего изделия')
+            await message.answer(
+                'Привет! Тут ты можешь записаться на мастер-класс по гончарному делу, '
+                f'а также узнать о готовности твоего изделия')
             tracer_l.tracer_charge(
                 'INFO', message.from_user.id, '/start', "user received start message")
         except Exception as error:
@@ -337,14 +340,14 @@ async def help_user(message: types.Message):
 # =============================================================================
 # --------------------------- НАВИГАЦИЯ ---------------------------------------
 # --------------------- ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ --------------------------------
-@dp.message_handler(lambda message: message.text == 'Поделиться номером телефона')
+@dp.message_handler(lambda message: message.text == 'Отправить номер телефона')
 async def get_contact_info(message: types.Message):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     phone_button = types.KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)
     keyboard.add(phone_button)
     tracer_l.tracer_charge(
         'INFO', message.from_user.id, get_contact_info.__name__, "offer to send a contact")
-    await message.answer("Пожалуйста, отправьте свой номер телефона:", reply_markup=keyboard)
+    await message.answer("Нажмите кнопку 'Отправить номер телефона' ниже 👇, чтобы поделиться номером", reply_markup=keyboard)
 
 
 @dp.message_handler(content_types=types.ContentType.CONTACT)
@@ -364,11 +367,7 @@ async def contact_handler(message: types.Message):
 
     kb = [
         [
-            types.KeyboardButton(text="Узнать статус изделия")
-        ],
-        [
-            types.KeyboardButton(text="Больше"),
-            types.KeyboardButton(text="Мои данные")
+            types.KeyboardButton(text="Записаться на занятие")
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -424,7 +423,7 @@ async def product_status(message: types.Message):
         else:
             await bot.send_message(
                 message.from_user.id,
-                '<b>Статус не определен :(</b>\n\nКак только Ваше изделие начнет готовиться, Вам придет уведомление',
+                '<b>Статус не определен</b>\n\nКак только Ваше изделие начнет готовиться, Вам придет уведомление',
                 parse_mode='HTML'
             )
 
@@ -441,6 +440,7 @@ async def cmd_start(message: types.Message):
     if check_phone is False:
         await not_success_auth_user(message.from_user.id)
     else:
+        # TODO: Добавить проверку записи на занятие
         manager_customer_reg = ManagerCustomerReg()
         btn_days_for_register = manager_customer_reg.formatting_buttons_for_display()
 
@@ -481,6 +481,9 @@ async def process_comments(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
 
     user_data = await state.get_data()
+
+    message_to_delete = await message.answer("Формируем заявку...")
+
     date_format_for_display = ManagerCustomerReg.formatting_date_reg(user_data['date'])
     date_format_for_database = ManagerCustomerReg.formatting_date_reg_for_database(user_data['date'])
 
@@ -491,10 +494,6 @@ async def process_comments(message: types.Message, state: FSMContext):
     kb = [
         [
             types.KeyboardButton(text="Узнать статус изделия"),
-        ],
-        [
-            types.KeyboardButton(text="Пусто"),
-            types.KeyboardButton(text="Пусто"),
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -535,7 +534,15 @@ async def process_comments(message: types.Message, state: FSMContext):
                 parse_mode='HTML',
                 reply_markup=keyboard,
                 caption=f'<b>Ваш билет {CONFIRM_SYMBOL}</b>\n\n'
-                        f'Вы успешно записаны! Бот уведомит о занятие за день до него :)')
+                        f'Вы успешно записаны! Бот уведомит о занятии за день до него :)')
+
+            _db_manager = ProductManager(INSPIRA_DB)
+            _db_manager.update_user_group(id_user, f'{date_lesson}_{time_lesson.replace(":", ".")}', "WAIT")
+
+            await administrators.sending_messages_to_admins(
+                f"<b>Гость {id_user} записался {CONFIRM_SYMBOL}</b>\n\n"
+                f"Дата: {date_format_for_display['day']} {date_format_for_display['month']}\n"
+                f"Время: {time_lesson}")
 
     except Exception as fatal:
         await message.reply("Не удалось записаться :(\n\nПожалуйста, повторите попытку позже")
@@ -543,6 +550,7 @@ async def process_comments(message: types.Message, state: FSMContext):
             'CRITICAL', message.from_user.id, process_comments.__name__,
             f"critical error", fatal)
 
+    await message_to_delete.delete()
     await state.finish()
 
 
@@ -582,6 +590,9 @@ async def cancel_signup_by_user(callback_query: types.CallbackQuery):
 
         if status_delete:
             await bot.send_message(user_id, f"Запись отменена {STOP_SYMBOL}")
+
+            await administrators.sending_messages_to_admins(f"Гость {user_id} отменил запись на занятие {STOP_SYMBOL}")
+
             tracer_l.tracer_charge(
                 'INFO', callback_query.from_user.id, process_product_confirm.__name__,
                 f"user canceled the lesson")
@@ -670,8 +681,15 @@ async def start_form(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(state=FormGroupProduct.group)
 async def process_group(message: types.Message, state: FSMContext):
+    product_manager = ProductManager(INSPIRA_DB)
+
     async with state.proxy() as data:
-        data['group'] = message.text
+        group_number = product_manager.get_group(data['user_id'])
+
+        if group_number is not None:
+            data['group'] = group_number
+        else:
+            data['group'] = message.text
 
     user_manager = UserManager(INSPIRA_DB)
     guest_contact = user_manager.get_user_contact_info(data['user_id'])
@@ -857,17 +875,14 @@ async def show_all_groups(message: types.Message, page: int = 0):
         print(f"Showing groups for page: {page}")
 
         product_manager = ProductManager(INSPIRA_DB)
-        all_groups_list = product_manager.get_all_groups()
+        unique_groups = product_manager.get_all_groups()
 
-        unique_groups = set(grop[4] for grop in all_groups_list)
-        unique_groups_list = list(unique_groups)
-
-        total_pages = (len(unique_groups_list) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE
+        total_pages = (len(unique_groups) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE
         start_index = page * GROUPS_PER_PAGE
         end_index = start_index + GROUPS_PER_PAGE
-        groups_to_display = unique_groups_list[start_index:end_index]
+        groups_to_display = unique_groups[start_index:end_index]
 
-        print(f"Total groups: {len(unique_groups_list)}, Total pages: {total_pages}, Groups on this page: {len(groups_to_display)}")
+        print(f"Total groups: {len(unique_groups)}, Total pages: {total_pages}, Groups on this page: {len(groups_to_display)}")
 
         markup = InlineKeyboardMarkup()
         for group in groups_to_display:

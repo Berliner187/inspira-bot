@@ -367,19 +367,23 @@ class ProductManager(DataBaseManager):
     @templates_status_events.event_handler
     def get_all_groups(self) -> list:
         """
-            Получение списка всех групп из БД.
-            :return: список всех сохраненных групп.
+            Получение списка всех уникальных групп из БД.
+            :return: список всех уникальных сохраненных групп.
         """
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
         query = f'SELECT * FROM {PRODUCTS_TABLE_NAME}'
-
-        cursor.execute(query)
-        list_users_data = cursor.fetchall()
+        all_groups = cursor.execute(query).fetchall()
         conn.close()
 
-        return list_users_data
+        unique_groups = set()
+
+        for group in all_groups:
+            if group[4] is not None:
+                unique_groups.add(group[4])
+
+        return list(unique_groups)
 
     @templates_status_events.event_handler
     def get_group(self, user_id: int):
@@ -876,6 +880,21 @@ class Schedule(DataBaseManager):
     def _get_datetime_now():
         return datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
+    @staticmethod
+    def is_lesson_upcoming(lesson_date_str) -> bool:
+        """
+            Проверяет, актуально ли занятие в зависимости от текущей даты и даты занятия.
+            :param lesson_date_str: Дата занятия в формате 'дд.мм.гггг'
+            :return: True, если занятие актуально (в пределах трех недель), иначе False
+        """
+        date_format = '%d.%m.%Y'
+        lesson_date = datetime.datetime.strptime(lesson_date_str, date_format)
+
+        current_date = datetime.datetime.now()
+        three_weeks_later = current_date + datetime.timedelta(weeks=3)
+
+        return current_date <= lesson_date <= three_weeks_later
+
     def set_available_services(self):
         pass
 
@@ -909,22 +928,6 @@ class AppointmentManager(Schedule):
             return True     # Если гость записан
         else:
             return False     # Если гость НЕ записан
-
-    @staticmethod
-    def _is_lesson_upcoming(lesson_date_str) -> bool:
-        """
-        Проверяет, актуально ли занятие в зависимости от текущей даты и даты занятия.
-        :param lesson_date_str: Дата занятия в формате 'дд.мм.гггг'
-        :return: True, если занятие актуально (в пределах трех недель), иначе False
-        """
-        # Преобразование строки с датой в объект datetime
-        date_format = '%d.%m.%Y'
-        lesson_date = datetime.datetime.strptime(lesson_date_str, date_format)
-
-        current_date = datetime.datetime.now()
-        three_weeks_later = current_date + datetime.timedelta(weeks=3)
-
-        return current_date <= lesson_date <= three_weeks_later
 
     def __get_guest_list_for_lessons(self) -> list:
         conn = sqlite3.connect(self.db_name)
