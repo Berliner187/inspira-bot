@@ -1097,13 +1097,13 @@ class AppointmentManager(Schedule):
     @templates_status_events.event_handler
     def get_lessons_by_time(self):
         """
-            Выгрузка количества людей на занятия в 11:00, 13:00 и 15:00 по датам
+            Выгрузка количества людей на занятия в 11:00, 13:30 и 15:30 по датам
         :return: Словарь с датами и количеством людей на занятия
         """
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
-        times_of_interest = ['11:00', '13:00', '15:00']
+        times_of_interest = ['11:00', '13:30', '15:30']
 
         lessons_summary = {}
 

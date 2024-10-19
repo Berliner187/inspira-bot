@@ -29,7 +29,7 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.5.4'
+__version__ = '0.5.5'
 DEBUG = True
 
 
@@ -456,8 +456,8 @@ async def process_date(message: types.Message, state: FSMContext):
 
     # TODO: написать логику извлечения этих данных из БД
     time_buttons.add(InlineKeyboardButton("11:00"))
-    time_buttons.add(InlineKeyboardButton("13:00"))
-    time_buttons.add(InlineKeyboardButton("15:00"))
+    time_buttons.add(InlineKeyboardButton("13:30"))
+    time_buttons.add(InlineKeyboardButton("15:30"))
 
     await message.answer("Выберите время:", reply_markup=time_buttons)
     await FormRegistrationForLesson.time.set()
