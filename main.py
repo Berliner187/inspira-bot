@@ -29,8 +29,8 @@ from customer_registrations import ManagerCustomerReg
 from painting import process_image
 
 
-__version__ = '0.5.5'
-DEBUG = True
+__version__ = '1.0.0'
+DEBUG = False
 
 
 try:
@@ -131,18 +131,37 @@ control_access_confirmed_users = ControlAccessConfirmedUsers()
 async def not_success_auth_user(user_id: int):
     kb = [
         [
-            types.KeyboardButton(text="Отправить номер телефона"),
+            types.KeyboardButton(text="Ввести номер телефона")
         ]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
     await bot.send_message(user_id,
-                           "<b>Упс..</b>\n"
                            "Вы не авторизованы\n\n"
-                           "<i>Подтвердите свой аккаунт, отправив номер телефона</i>",
+                           "<i>Подтвердите свой аккаунт, введя номер телефона</i>",
                            reply_markup=keyboard, parse_mode='HTML')
     tracer_l.tracer_charge(
         'INFO', user_id, product_status.__name__, "user: not logged in")
+
+
+@dp.message_handler(lambda message: message.text == "Ввести номер телефона")
+async def ask_for_phone_number(message: types.Message):
+    await message.answer("Пожалуйста, введите ваш номер телефона в формате +79998887766:")
+
+
+@dp.message_handler(lambda message: re.match(r'^\+?\d{10,15}$', message.text))
+async def handle_phone_number(message: types.Message):
+    phone_number = message.text
+
+    user_manager = UserManager(INSPIRA_DB)
+    user_manager.update_contact_info(user_id=message.from_user.id, phone=phone_number)
+
+    await message.answer(f"Вы ввели номер телефона: {phone_number}")
+
+
+# @dp.message_handler(lambda message: message.text == "Ввести номер телефона")
+# async def handle_invalid_input(message: types.Message):
+#     await message.answer("Пожалуйста, введите корректный номер телефона или нажмите 'Ввести номер телефона'.")
 
 
 @timing_decorator
@@ -303,15 +322,10 @@ async def start_message(message: types.Message):
         keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
         try:
-            # await bot.send_photo(
-            #     message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
-            #     reply_markup=keyboard, parse_mode='HTML',
-            #     caption=f'<b>INSPIRA – искусство живет здесь.</b>\n\n'
-            #             f'Привет! Это Бот Inspira – тут ты можешь записаться на мастер-класс по гончарному делу, '
-            #             f'а также узнать о готовности твоего изделия')
-            await message.answer(
-                'Привет! Тут ты можешь записаться на мастер-класс по гончарному делу, '
-                f'а также узнать о готовности твоего изделия')
+            await bot.send_photo(
+                message.from_user.id, photo=InputFile('media/img/menu.png', filename='start_message.png'),
+                reply_markup=keyboard, parse_mode='HTML',
+                caption=f'Привет! Здесь ты можешь узнать о готовности своего изделия')
             tracer_l.tracer_charge(
                 'INFO', message.from_user.id, '/start', "user received start message")
         except Exception as error:
@@ -519,7 +533,7 @@ async def process_comments(message: types.Message, state: FSMContext):
             markup.add(ready_button)
 
             await bot.send_message(
-                message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпеньем :)",
+                message.from_user.id, "<b>Вы уже записаны</b>\n\nЖдём Вас с нетерпением :)",
                 reply_markup=markup,
                 parse_mode='HTML')
         elif appointment_record is None:
@@ -929,8 +943,12 @@ async def show_all_admins(message: types.Message):
 
         for admin_id in users_id_of_admins:
             user_data = users_man.get_user_data(admin_id)
-            first_name = user_data[2]
-            phone_number = user_data[3]
+            try:
+                first_name = user_data[2]
+                phone_number = user_data[3]
+            except TypeError:
+                first_name = '-'
+                phone_number = '-'
             button = InlineKeyboardButton(f"{first_name} • {phone_number}", callback_data=f"admin_card:{admin_id}")
             markup.add(button)
 

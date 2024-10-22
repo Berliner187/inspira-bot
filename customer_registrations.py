@@ -3,6 +3,7 @@ import datetime
 
 
 class ManagerCustomerReg:
+    """ Сущность, управляющая отображением данных при записи на занятие """
     def get_days_week_for_reg(self):
         today = datetime.date.today()
 
